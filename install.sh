@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install kavita-sync under /home/root so a reMarkable firmware update keeps it.
+# Install cwa-sync under /home/root so a reMarkable firmware update keeps it.
 # Usage: sh install.sh [--prefix DIR] [--timer] [--fetch-wget]
 
 set -eu -f
@@ -9,14 +9,14 @@ PREFIX=${PREFIX:-/home/root}
 PROFILE=${PROFILE:-$PREFIX/.profile}
 INSTALL_TIMER=0
 FETCH_WGET=0
-WGET_URL=${KAVITA_FETCH_WGET_URL:-http://toltec-dev.org/thirdparty/bin/wget-v1.21.1-3}
-WGET_SHA256=${KAVITA_FETCH_WGET_SHA256:-3130886a020a56b7471ed60f3742db26acdced4b27fed5be22f9892b77589bc5}
+WGET_URL=${CWA_FETCH_WGET_URL:-http://toltec-dev.org/thirdparty/bin/wget-v1.21.1-3}
+WGET_SHA256=${CWA_FETCH_WGET_SHA256:-3130886a020a56b7471ed60f3742db26acdced4b27fed5be22f9892b77589bc5}
 
 usage() {
     cat <<'EOF'
 Usage: install.sh [--prefix DIR] [--timer] [--fetch-wget]
 
-Copies kavita-sync to $PREFIX/kavita-sync (default /home/root), creates a
+Copies cwa-sync to $PREFIX/cwa-sync (default /home/root), creates a
 config from the example if needed, and puts a symlink on
 $PREFIX/.local/bin.
 
@@ -95,25 +95,25 @@ install_static_wget() {
 
 copy_tree() {
     local dest
-    dest=$PREFIX/kavita-sync
+    dest=$PREFIX/cwa-sync
     if [ "$SRC" = "$dest" ]; then
-        chmod 755 "$dest/kavita-sync" "$dest/install.sh" "$dest/uninstall.sh"
+        chmod 755 "$dest/cwa-sync" "$dest/install.sh" "$dest/uninstall.sh"
         return 0
     fi
     mkdir -p -- "$dest/lib" "$dest/systemd"
-    cp -- "$SRC/kavita-sync" "$SRC/install.sh" "$SRC/uninstall.sh" \
-        "$SRC/kavita-sync.conf.example" "$SRC/README.md" "$dest/"
+    cp -- "$SRC/cwa-sync" "$SRC/install.sh" "$SRC/uninstall.sh" \
+        "$SRC/cwa-sync.conf.example" "$SRC/README.md" "$dest/"
     cp -- "$SRC/lib/util.sh" "$SRC/lib/http.sh" "$SRC/lib/sync.sh" "$SRC/lib/opds.awk" "$dest/lib/"
-    cp -- "$SRC/systemd/kavita-sync.service" "$SRC/systemd/kavita-sync.timer" "$dest/systemd/"
-    chmod 755 "$dest/kavita-sync" "$dest/install.sh" "$dest/uninstall.sh"
+    cp -- "$SRC/systemd/cwa-sync.service" "$SRC/systemd/cwa-sync.timer" "$dest/systemd/"
+    chmod 755 "$dest/cwa-sync" "$dest/install.sh" "$dest/uninstall.sh"
 }
 
 ensure_config() {
     local cfg
-    cfg=$PREFIX/.config/kavita-sync.conf
+    cfg=$PREFIX/.config/cwa-sync.conf
     mkdir -p -- "$PREFIX/.config"
     if [ ! -f "$cfg" ]; then
-        cp -- "$PREFIX/kavita-sync/kavita-sync.conf.example" "$cfg"
+        cp -- "$PREFIX/cwa-sync/cwa-sync.conf.example" "$cfg"
         chmod 600 "$cfg"
         printf 'install.sh: created %s\n' "$cfg" >&2
     else
@@ -123,8 +123,8 @@ ensure_config() {
 
 ensure_profile() {
     local begin end
-    begin="# kavita-sync PATH begin"
-    end="# kavita-sync PATH end"
+    begin="# cwa-sync PATH begin"
+    end="# cwa-sync PATH end"
     if [ -f "$PROFILE" ] && grep -q -F -- "$begin" "$PROFILE"; then
         return 0
     fi
@@ -133,7 +133,7 @@ ensure_profile() {
         printf '\n%s\n' "$begin"
         # The profile must keep a literal $PATH; the login shell expands it.
         # shellcheck disable=SC2016
-        printf 'export PATH="%s:%s:$PATH"\n' "$PREFIX/.local/bin" "$PREFIX/kavita-sync"
+        printf 'export PATH="%s:%s:$PATH"\n' "$PREFIX/.local/bin" "$PREFIX/cwa-sync"
         printf '%s\n' "$end"
     } >> "$PROFILE"
 }
@@ -142,17 +142,17 @@ install_timer() {
     local unit_dir svc
     unit_dir=${SYSTEMD_UNIT_DIR:-/etc/systemd/system}
     mkdir -p -- "$unit_dir"
-    svc=$unit_dir/kavita-sync.service
-    sed "s#/home/root/kavita-sync/kavita-sync#$PREFIX/kavita-sync/kavita-sync#g" \
-        "$PREFIX/kavita-sync/systemd/kavita-sync.service" > "$svc"
-    cp -- "$PREFIX/kavita-sync/systemd/kavita-sync.timer" "$unit_dir/kavita-sync.timer"
+    svc=$unit_dir/cwa-sync.service
+    sed "s#/home/root/cwa-sync/cwa-sync#$PREFIX/cwa-sync/cwa-sync#g" \
+        "$PREFIX/cwa-sync/systemd/cwa-sync.service" > "$svc"
+    cp -- "$PREFIX/cwa-sync/systemd/cwa-sync.timer" "$unit_dir/cwa-sync.timer"
     if [ "$unit_dir" = /etc/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload
-        systemctl enable --now kavita-sync.timer
-        printf 'install.sh: enabled kavita-sync.timer\n' >&2
+        systemctl enable --now cwa-sync.timer
+        printf 'install.sh: enabled cwa-sync.timer\n' >&2
     else
         printf 'install.sh: wrote units in %s\n' "$unit_dir" >&2
-        printf 'install.sh: enable later with: systemctl enable --now kavita-sync.timer\n' >&2
+        printf 'install.sh: enable later with: systemctl enable --now cwa-sync.timer\n' >&2
     fi
     printf 'install.sh: the timer lives on the rootfs and is removed by a firmware update. Re-run install.sh --timer afterwards.\n' >&2
     printf 'install.sh: the tablet does not run timers while it is suspended.\n' >&2
@@ -200,7 +200,7 @@ esac
 copy_tree
 ensure_config
 mkdir -p -- "$PREFIX/.local/bin" "$PREFIX/plato-media"
-ln -sfn "$PREFIX/kavita-sync/kavita-sync" "$PREFIX/.local/bin/kavita-sync"
+ln -sfn "$PREFIX/cwa-sync/cwa-sync" "$PREFIX/.local/bin/cwa-sync"
 ensure_profile
 
 if [ "$FETCH_WGET" = 1 ] || ! have_tls_client; then
@@ -214,14 +214,16 @@ fi
 cat <<EOF
 Installed.
 
-1. Edit $PREFIX/.config/kavita-sync.conf and set API_KEY.
-   Kavita: user menu → Settings → 3rd party clients / OPDS.
-   OPDS must be enabled, and the user needs download permission.
+1. Edit $PREFIX/.config/cwa-sync.conf and set SERVER_URL, USERNAME and
+   PASSWORD. The server is a calibre-web OPDS catalog (OPDS_PATH, default
+   /opds), e.g. a crocodilestick/calibre-web-automated:latest container on
+   port 8083. In calibre-web the user needs OPDS and download permission,
+   and HTTP basic auth is used.
 2. Dry run:
-     $PREFIX/kavita-sync/kavita-sync --dry-run
+     $PREFIX/cwa-sync/cwa-sync --dry-run
 3. Sync:
-     $PREFIX/kavita-sync/kavita-sync
+     $PREFIX/cwa-sync/cwa-sync
 Books land in the DEST directory (default $PREFIX/plato-media) for Plato.
 
-Optional timer (lost on firmware update): sh $PREFIX/kavita-sync/install.sh --timer
+Optional timer (lost on firmware update): sh $PREFIX/cwa-sync/install.sh --timer
 EOF

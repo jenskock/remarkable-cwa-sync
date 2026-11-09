@@ -1,5 +1,5 @@
 [Unit]
-Description=Run Kavita sync after boot and once a day
+Description=Run calibre-web (CWA) OPDS sync after boot and once a day
 
 [Timer]
 OnBootSec=3min

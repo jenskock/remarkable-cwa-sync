@@ -1,4 +1,4 @@
-kavita-sync.conf
+cwa-sync.conf
 *.local.conf
 tests/tmp/
 .work/

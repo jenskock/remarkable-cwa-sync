@@ -1,0 +1,7 @@
+[Unit]
+Description=Mirror calibre-web (CWA) OPDS books into Plato
+
+[Service]
+Type=oneshot
+ExecStart=/home/root/cwa-sync/cwa-sync
+Nice=10

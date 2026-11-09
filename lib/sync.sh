@@ -7,7 +7,7 @@ init_manifest() {
     if [ -f "$MANIFEST" ]; then
         cp "$MANIFEST" "$MANIFEST_NEW"
     else
-        printf '%s\n' "# kavita-sync manifest v1" > "$MANIFEST_NEW"
+        printf '%s\n' "# cwa-sync manifest v1" > "$MANIFEST_NEW"
     fi
 }
 
@@ -55,7 +55,8 @@ mark_url() {
 }
 
 handle_nav() {
-    local href title nav_author library series author_ctx abs kind use_author
+    local href title nav_author library series author_ctx abs tail
+    local use_author use_series use_library
     href=$1
     title=$2
     nav_author=$3
@@ -67,35 +68,36 @@ handle_nav() {
         log warn "skipping off-server link $(redact "$abs")"
         return 0
     fi
-    kind=$(classify_url "$abs")
-    case $kind in
-        library)
-            crawl_feed "$abs" "$title" "" "$nav_author" || return 1
+    tail=$(opds_tail "$abs")
+    use_author=$author_ctx
+    use_series=$series
+    use_library=$library
+    case $tail in
+        external|download|download/*)
+            log debug "skip $(classify_url "$abs") $(redact "$abs")"
+            return 0
             ;;
-        series)
-            use_author=$nav_author
-            if [ -z "$use_author" ]; then
-                use_author=$author_ctx
+        # calibre-web navigation feeds: the entry title of an author,
+        # series or tag detail link is the author/series/tag name.
+        author/*)
+            if [ -n "$nav_author" ]; then
+                use_author=$nav_author
+            elif [ -n "$title" ]; then
+                use_author=$title
             fi
-            crawl_feed "$abs" "$library" "$title" "$use_author" || return 1
             ;;
-        nested)
-            use_author=$nav_author
-            if [ -z "$use_author" ]; then
-                use_author=$author_ctx
+        series/*)
+            if [ -n "$title" ]; then
+                use_series=$title
             fi
-            if [ -z "$series" ]; then
-                series=$title
+            ;;
+        category/*)
+            if [ -n "$title" ]; then
+                use_library=$title
             fi
-            crawl_feed "$abs" "$library" "$series" "$use_author" || return 1
-            ;;
-        download|skip)
-            log debug "skip $kind $(redact "$abs")"
-            ;;
-        *)
-            log debug "skip $kind $(redact "$abs")"
             ;;
     esac
+    crawl_feed "$abs" "$use_library" "$use_series" "$use_author" || return 1
 }
 
 record_book() {
@@ -143,7 +145,7 @@ crawl_feed() {
         case $HTTP_CODE in
             200) ;;
             401|403)
-                log error "access denied (HTTP $HTTP_CODE). Check API_KEY, and that OPDS is enabled."
+                log error "access denied (HTTP $HTTP_CODE). Check USERNAME/PASSWORD, and that the calibre-web user may use OPDS and download."
                 return 1
                 ;;
             *)
@@ -152,7 +154,7 @@ crawl_feed() {
                 ;;
         esac
         if ! grep -q '<feed' "$body"; then
-            log error "response is not an OPDS feed. If Cloudflare returned a block page, set USER_AGENT in the config."
+            log error "response is not an OPDS feed. If a reverse proxy returned a block page, set USER_AGENT in the config."
             return 1
         fi
         parse_feed "$body" "$parsed" || return 1
@@ -216,7 +218,7 @@ crawl_feed() {
 
 crawl() {
     local start
-    start=$(printf '%s/api/opds/%s/libraries' "$SERVER_URL" "$API_KEY")
+    start=$(printf '%s%s' "$SERVER_URL" "$OPDS_PATH")
     : > "$WORK/books.raw"
     : > "$WORK/seen.urls"
     if ! crawl_feed "$start" "" "" ""; then
@@ -234,6 +236,10 @@ dedupe_books() {
         : > "$WORK/books"
         return 0
     fi
+    # One record per book key. The same book shows up in several catalogue
+    # sections (books, authors, series, tags) with different context, so
+    # keep the first record and fill still-empty fields (library, series)
+    # from later records.
     BOOK_US=$US LC_ALL=C awk '
         BEGIN { FS = ENVIRON["BOOK_US"]; OFS = FS }
         {
@@ -242,11 +248,20 @@ dedupe_books() {
                 n++
                 order[n] = k
                 seen[k] = 1
+                for (j = 1; j <= NF; j++) f[k, j] = $j
+            } else {
+                for (j = 1; j <= NF; j++) {
+                    if (f[k, j] == "" && $j != "") f[k, j] = $j
+                }
             }
-            line[k] = $0
         }
         END {
-            for (i = 1; i <= n; i++) print line[order[i]]
+            for (i = 1; i <= n; i++) {
+                k = order[i]
+                out = f[k, 1]
+                for (j = 2; j <= 8; j++) out = out FS f[k, j]
+                print out
+            }
         }
     ' "$WORK/books.raw" > "$WORK/books"
 }
@@ -362,9 +377,12 @@ download_one() {
         return 0
     fi
     remote=$(urldecode "$remote")
-    if [ -z "$remote" ]; then
-        remote=$(urldecode "${href##*/}")
-    fi
+    case ${remote##*/} in
+        *.*) ;;
+        # calibre-web sets the acquisition link title to the format ("EPUB"),
+        # not a filename; fall back to the entry title plus the mime extension.
+        *) remote="" ;;
+    esac
     remote=$(safe_filename "$remote" "$title" "$mime")
     rel=$(build_rel "$library" "$series" "$author" "$remote")
     rel=$(reserve_rel "$rel" "$key")
@@ -497,7 +515,7 @@ download_all() {
 prune() {
     local mline key rel path newm line
     newm=$WORK/manifest.pruned
-    printf '%s\n' "# kavita-sync manifest v1" > "$newm"
+    printf '%s\n' "# cwa-sync manifest v1" > "$newm"
     : > "$WORK/catalog.keys"
     if [ -f "$WORK/books" ]; then
         while IFS= read -r line || [ -n "$line" ]; do

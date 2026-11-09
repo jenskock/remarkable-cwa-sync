@@ -1,7 +1,7 @@
 #!/bin/sh
-# Exercise kavita-sync against a local OPDS fixture. POSIX sh.
-# The outer invocation also runs shellcheck and repeats the suite under
-# BusyBox sh + BusyBox awk.
+# Exercise cwa-sync against a local calibre-web-style OPDS fixture.
+# POSIX sh. The outer invocation also runs shellcheck and repeats the suite
+# under BusyBox sh + BusyBox awk.
 
 set -eu
 
@@ -9,7 +9,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
 if [ "${1:-}" != "--inner" ]; then
     shellcheck -s sh \
-        "$ROOT/kavita-sync" \
+        "$ROOT/cwa-sync" \
         "$ROOT/install.sh" \
         "$ROOT/uninstall.sh" \
         "$ROOT/lib/util.sh" \
@@ -23,13 +23,13 @@ if [ "${1:-}" != "--inner" ]; then
 exec busybox awk "$@"
 EOF
     chmod 755 "$awkdir/awk"
-    PATH="$awkdir:$PATH" KAVITA_TEST_SH="busybox sh" SKIP_INSTALL=1 SKIP_WGET=1 "$0" --inner
+    PATH="$awkdir:$PATH" CWA_TEST_SH="busybox sh" SKIP_INSTALL=1 SKIP_WGET=1 "$0" --inner
     rm -rf "$awkdir"
     exit 0
 fi
 
-if [ -z "${KAVITA_TEST_SH:-}" ]; then
-    KAVITA_TEST_SH=/bin/sh
+if [ -z "${CWA_TEST_SH:-}" ]; then
+    CWA_TEST_SH=/bin/sh
 fi
 
 WORK=$(mktemp -d)
@@ -75,7 +75,7 @@ wait_health() {
 }
 
 reset_control() {
-    rm -f "$CONTROL/fail-libraries" "$CONTROL/fail-chapter-100" "$CONTROL/include-evil"
+    rm -f "$CONTROL/fail-books" "$CONTROL/fail-download-100" "$CONTROL/include-evil"
     printf '%s\n' "$1" > "$CONTROL/version"
 }
 
@@ -89,6 +89,8 @@ hits() {
     ' "$CONTROL/stats.tsv"
 }
 
+CRED_B64=$(python3 -c 'import base64,sys; sys.stdout.write(base64.b64encode(b"test-user:test-pass").decode())')
+
 sync_run() {
     local want allow_stdout rc
     want=$1
@@ -100,7 +102,7 @@ sync_run() {
     fi
     set +e
     # shellcheck disable=SC2086
-    env KAVITA_RETRY_SLEEP=0 $KAVITA_TEST_SH "$ROOT/kavita-sync" "$@" >"$OUT" 2>"$ERR"
+    env CWA_RETRY_SLEEP=0 $CWA_TEST_SH "$ROOT/cwa-sync" "$@" >"$OUT" 2>"$ERR"
     rc=$?
     set -e
     if [ "$rc" != "$want" ]; then
@@ -109,8 +111,8 @@ sync_run() {
     if [ "$allow_stdout" != 1 ] && [ -s "$OUT" ]; then
         fail "unexpected stdout"
     fi
-    if grep -F -q -- "test-key" "$ERR"; then
-        fail "API key leaked into the log"
+    if grep -F -q -- "test-pass" "$ERR" || grep -F -q -- "$CRED_B64" "$ERR"; then
+        fail "password leaked into the log"
     fi
 }
 
@@ -122,12 +124,14 @@ write_cfg() {
     layout=$4
     cat > "$cfg" <<EOF
 SERVER_URL=http://127.0.0.1:$PORT
-API_KEY=test-key
+OPDS_PATH=/opds
+USERNAME=test-user
+PASSWORD=test-pass
 DEST=$dest
 LAYOUT=$layout
 STATE_DIR=$state
 DELETE_MISSING=0
-USER_AGENT=kavita-sync-test
+USER_AGENT=cwa-sync-test
 INSECURE=0
 EOF
 }
@@ -170,20 +174,21 @@ fi
 books=$(awk -v US="$(printf '\037')" 'BEGIN{FS=US} $1=="BOOK"{n++} END{print n+0}' "$parser_out")
 navs=$(awk -v US="$(printf '\037')" 'BEGIN{FS=US} $1=="NAV"{n++} END{print n+0}' "$parser_out")
 nexts=$(awk -v US="$(printf '\037')" 'BEGIN{FS=US} $1=="NEXT"{n++} END{print n+0}' "$parser_out")
-[ "$books" = 2 ] || fail "parser book count $books"
+[ "$books" = 2 ] || fail "parser book count $books (one per format)"
 [ "$navs" = 1 ] || fail "parser nav count $navs"
 [ "$nexts" = 1 ] || fail "parser next count $nexts"
-author=$(awk -v US="$(printf '\037')" 'BEGIN{FS=US} $1=="BOOK" && $2=="200"{print $4}' "$parser_out")
+author=$(awk -v US="$(printf '\037')" 'BEGIN{FS=US} $1=="BOOK" && $2=="urn:uuid:book-200"{print $4}' "$parser_out" | head -1)
 python3 -c 'import sys; assert sys.argv[1]=="Jörg & Söhne", sys.argv[1]' "$author" || fail "author entity"
-title=$(awk -v US="$(printf '\037')" 'BEGIN{FS=US} $1=="BOOK" && $2=="200"{print $3}' "$parser_out")
+title=$(awk -v US="$(printf '\037')" 'BEGIN{FS=US} $1=="BOOK" && $2=="urn:uuid:book-200"{print $3}' "$parser_out" | head -1)
 python3 -c 'import sys; assert sys.argv[1]=="Über den Berg", sys.argv[1]' "$title" || fail "title entity"
-grep -q 'pageNumber=2' "$parser_out" || fail "missing next href"
-grep -q 'chapter/100/download' "$parser_out" || fail "missing acquisition link"
-grep -q 'opds-pse/stream' "$parser_out" && fail "stream link was treated as a book"
+grep -q 'offset=2' "$parser_out" || fail "missing next href"
+grep -q '/opds/download/200/epub/' "$parser_out" || fail "missing epub acquisition link"
+grep -q '/opds/download/200/pdf/' "$parser_out" || fail "missing pdf acquisition link"
+grep -q 'opds-spec.org/image' "$parser_out" && fail "image link was treated as a book"
 
 # shellcheck disable=SC1091
 . "$ROOT/lib/util.sh"
-API_KEY=test-key
+OPDS_PATH=/opds
 SERVER_URL=http://127.0.0.1:9
 san=$(sanitize_component 'a/b:c*?"<>|' 'x')
 [ "$san" = "a-b-c------" ] || fail "sanitize got $san"
@@ -191,11 +196,15 @@ san=$(sanitize_component '  ..hidden  ' 'x')
 [ "$san" = "hidden" ] || fail "sanitize dots got $san"
 dec=$(urldecode '%43%20')
 [ "$dec" = "C " ] || fail "urldecode got [$dec]"
-[ "$(classify_url "http://127.0.0.1:9/api/opds/test-key/libraries/12")" = "library" ] || fail "classify library"
-[ "$(classify_url "http://127.0.0.1:9/api/opds/test-key/series/12")" = "series" ] || fail "classify series"
-[ "$(classify_url "http://127.0.0.1:9/api/opds/test-key/series/12/volume/1/chapter/3")" = "nested" ] || fail "classify chapter"
-[ "$(classify_url "http://127.0.0.1:9/api/opds/test-key/series/12/volume/1/chapter/3/download/Nested.cbz")" = "download" ] || fail "classify download"
-[ "$(book_key "/api/opds/test-key/series/10/volume/1/chapter/101/download/A.epub" 101)" = "s10/v1/c101" ] || fail "book key"
+b64=$(printf '%s' 'Aladdin:open sesame' | b64encode)
+[ "$b64" = "QWxhZGRpbjpvcGVuIHNlc2FtZQ==" ] || fail "b64encode got $b64"
+[ "$(classify_url "http://127.0.0.1:9/opds")" = "root" ] || fail "classify root"
+[ "$(classify_url "http://127.0.0.1:9/opds/books")" = "nav" ] || fail "classify books"
+[ "$(classify_url "http://127.0.0.1:9/opds/author/3")" = "nav" ] || fail "classify author"
+[ "$(classify_url "http://127.0.0.1:9/opds/download/100/epub/")" = "download" ] || fail "classify download"
+[ "$(classify_url "http://127.0.0.1:9/other")" = "skip" ] || fail "classify external"
+[ "$(book_key "/opds/download/100/epub/" 100)" = "dl-100-epub" ] || fail "book key"
+[ "$(book_key "/opds/download/100/epub/?x=1" 100)" = "dl-100-epub" ] || fail "book key with query"
 
 if [ "${SKIP_INSTALL:-}" != 1 ]; then
     iprefix=$WORK/inst
@@ -205,24 +214,24 @@ if [ "${SKIP_INSTALL:-}" != 1 ]; then
     mkdir -p "$SYSTEMD_UNIT_DIR"
     sh "$ROOT/install.sh" --prefix "$iprefix" --timer >/dev/null 2>&1
     sh "$ROOT/install.sh" --prefix "$iprefix" --timer >/dev/null 2>&1
-    [ -x "$iprefix/kavita-sync/kavita-sync" ] || fail "install missing script"
-    [ -L "$iprefix/.local/bin/kavita-sync" ] || fail "install missing symlink"
-    [ -f "$iprefix/.config/kavita-sync.conf" ] || fail "install missing config"
-    [ -f "$WORK/units/kavita-sync.timer" ] || fail "timer unit missing"
-    grep -q "$iprefix/kavita-sync/kavita-sync" "$WORK/units/kavita-sync.service" || fail "service path"
-    printf 'API_KEY=keep-this\nSERVER_URL=https://books.jenskock.de\nDEST=/tmp/books\n' > "$iprefix/.config/kavita-sync.conf"
+    [ -x "$iprefix/cwa-sync/cwa-sync" ] || fail "install missing script"
+    [ -L "$iprefix/.local/bin/cwa-sync" ] || fail "install missing symlink"
+    [ -f "$iprefix/.config/cwa-sync.conf" ] || fail "install missing config"
+    [ -f "$WORK/units/cwa-sync.timer" ] || fail "timer unit missing"
+    grep -q "$iprefix/cwa-sync/cwa-sync" "$WORK/units/cwa-sync.service" || fail "service path"
+    printf 'PASSWORD=keep-this\nSERVER_URL=http://127.0.0.1:8083\nOPDS_PATH=/opds\nDEST=/tmp/books\n' > "$iprefix/.config/cwa-sync.conf"
     sh "$ROOT/install.sh" --prefix "$iprefix" >/dev/null 2>&1
-    grep -q 'keep-this' "$iprefix/.config/kavita-sync.conf" || fail "install rewrote config"
-    markers=$(grep -c 'kavita-sync PATH begin' "$iprefix/.profile")
+    grep -q 'keep-this' "$iprefix/.config/cwa-sync.conf" || fail "install rewrote config"
+    markers=$(grep -c 'cwa-sync PATH begin' "$iprefix/.profile")
     [ "$markers" = 1 ] || fail "PATH block duplicated ($markers)"
     printf 'keep-book\n' > "$iprefix/plato-media/keep.txt"
     sh "$ROOT/uninstall.sh" --prefix "$iprefix" >/dev/null 2>&1
-    [ ! -d "$iprefix/kavita-sync" ] || fail "uninstall left scripts"
+    [ ! -d "$iprefix/cwa-sync" ] || fail "uninstall left scripts"
     [ -f "$iprefix/plato-media/keep.txt" ] || fail "uninstall removed books"
-    [ -f "$iprefix/.config/kavita-sync.conf" ] || fail "uninstall removed config"
+    [ -f "$iprefix/.config/cwa-sync.conf" ] || fail "uninstall removed config"
     sh "$ROOT/install.sh" --prefix "$iprefix" >/dev/null 2>&1
     sh "$ROOT/uninstall.sh" --prefix "$iprefix" --purge-config --purge-state >/dev/null 2>&1
-    [ ! -f "$iprefix/.config/kavita-sync.conf" ] || fail "purge-config kept config"
+    [ ! -f "$iprefix/.config/cwa-sync.conf" ] || fail "purge-config kept config"
     www=$WORK/www
     mkdir -p "$www"
     printf 'not-a-real-wget\n' > "$www/wget.bin"
@@ -254,14 +263,14 @@ PY
     done
     wprefix=$WORK/wprefix
     mkdir -p "$wprefix"
-    if KAVITA_FETCH_WGET_URL="http://127.0.0.1:$wport/wget.bin" \
-        KAVITA_FETCH_WGET_SHA256=deadbeef \
+    if CWA_FETCH_WGET_URL="http://127.0.0.1:$wport/wget.bin" \
+        CWA_FETCH_WGET_SHA256=0000000000000000000000000000000000000000000000000000000000000000 \
         sh "$ROOT/install.sh" --prefix "$wprefix" --fetch-wget >/dev/null 2>"$ERR"; then
         fail "bad checksum was accepted"
     fi
     [ ! -x "$wprefix/.local/bin/wget" ] || fail "bad wget was installed"
-    KAVITA_FETCH_WGET_URL="http://127.0.0.1:$wport/wget.bin" \
-        KAVITA_FETCH_WGET_SHA256="$good" \
+    CWA_FETCH_WGET_URL="http://127.0.0.1:$wport/wget.bin" \
+        CWA_FETCH_WGET_SHA256="$good" \
         sh "$ROOT/install.sh" --prefix "$wprefix" --fetch-wget >/dev/null 2>&1
     [ -x "$wprefix/.local/bin/wget" ] || fail "static wget was not installed"
     got=$(sha256sum "$wprefix/.local/bin/wget" | awk '{print $1}')
@@ -276,137 +285,149 @@ sync_run 0 --allow-stdout --help
 sync_run 2 --config "$WORK/missing.conf"
 
 EXPECTED=$(printf '%s\n' \
-    "Comics/Nested Comic/Nested.cbz" \
-    "Romane/Die Verwandlung/Die Verwandlung-c101.epub" \
-    "Romane/Die Verwandlung/Die Verwandlung.epub" \
-    "Romane/Über den Berg/Über den Berg.epub")
+    "Ada Lovelace/Nested Comic.cbz" \
+    "Franz Kafka/Die Verwandlung-dl-101-epub.epub" \
+    "Franz Kafka/Die Verwandlung.epub" \
+    "Jörg & Söhne/Über den Berg.epub")
 
-cfg=$WORK/kavita-sync.conf
+cfg=$WORK/cwa-sync.conf
 dest=$WORK/books
 state=$WORK/state
-write_cfg "$cfg" "$dest" "$state" library-series
+write_cfg "$cfg" "$dest" "$state" author
 reset_control 1
 
 sync_run 0 --config "$cfg" --dry-run
 [ ! -d "$dest" ] || [ -z "$(find "$dest" -type f -print)" ] || fail "dry-run wrote files"
 grep -q 'would download' "$ERR" || fail "dry-run did not list downloads"
-[ "$(hits 200 /download/)" = 0 ] || fail "dry-run downloaded a book"
+[ "$(hits 200 /opds/download/)" = 0 ] || fail "dry-run downloaded a book"
 
 sync_run 0 --config "$cfg"
 assert_tree "$dest" "$EXPECTED"
-[ "$(read_file "$dest/Romane/Die Verwandlung/Die Verwandlung.epub")" = "EPUB-100-v1" ] || fail "epub body"
-[ "$(read_file "$dest/Romane/Die Verwandlung/Die Verwandlung-c101.epub")" = "EPUB-101-v1" ] || fail "collision body"
-[ "$(read_file "$dest/Romane/Über den Berg/Über den Berg.epub")" = "EPUB-11-v1" ] || fail "unicode body"
-[ "$(read_file "$dest/Comics/Nested Comic/Nested.cbz")" = "CBZ-12-v1" ] || fail "cbz body"
-[ "$(hits 200 /chapter/100/download/)" = 1 ] || fail "duplicate chapter downloaded twice"
+[ "$(read_file "$dest/Franz Kafka/Die Verwandlung.epub")" = "EPUB-100-v1" ] || fail "epub body"
+[ "$(read_file "$dest/Franz Kafka/Die Verwandlung-dl-101-epub.epub")" = "EPUB-101-v1" ] || fail "collision body"
+[ "$(read_file "$dest/Jörg & Söhne/Über den Berg.epub")" = "EPUB-200-v1" ] || fail "unicode body"
+[ "$(read_file "$dest/Ada Lovelace/Nested Comic.cbz")" = "CBZ-12-v1" ] || fail "cbz body"
+[ "$(hits 200 /opds/download/100/epub/)" = 1 ] || fail "duplicate book downloaded twice"
 find "$dest" -name '*.partial.*' -print | grep -q . && fail "partial file left behind"
-[ "$(stat -c %a "$state/manifest.tsv")" = "600" ] || fail "manifest mode"
+python3 -c 'import os,sys; sys.exit(0 if (os.stat(sys.argv[1]).st_mode & 0o777) == 0o600 else 1)' "$state/manifest.tsv" || fail "manifest mode"
 
-before100=$(hits 200 /chapter/100/download/)
+before100=$(hits 200 /opds/download/100/epub/)
 sync_run 0 --config "$cfg"
-[ "$(hits 200 /chapter/100/download/)" = "$before100" ] || fail "unchanged book was downloaded again"
-[ "$(hits 304 /chapter/100/download/)" -ge 1 ] || fail "no 304 for unchanged book"
+[ "$(hits 200 /opds/download/100/epub/)" = "$before100" ] || fail "unchanged book was downloaded again"
+[ "$(hits 304 /opds/download/100/epub/)" -ge 1 ] || fail "no 304 for unchanged book"
 grep -q 'unchanged ' "$ERR" || fail "missing unchanged log"
-[ "$(read_file "$dest/Romane/Die Verwandlung/Die Verwandlung.epub")" = "EPUB-100-v1" ] || fail "304 clobbered file"
+[ "$(read_file "$dest/Franz Kafka/Die Verwandlung.epub")" = "EPUB-100-v1" ] || fail "304 clobbered file"
 
 sync_run 0 --config "$cfg" --force
-[ "$(hits 200 /chapter/100/download/)" -gt "$before100" ] || fail "force did not redownload"
+[ "$(hits 200 /opds/download/100/epub/)" -gt "$before100" ] || fail "force did not redownload"
 
 reset_control 2
 sync_run 0 --config "$cfg"
-[ "$(read_file "$dest/Romane/Über den Berg/Über den Berg.epub")" = "EPUB-11-v2" ] || fail "changed book not updated"
-[ -f "$dest/Comics/Nested Comic/Nested.cbz" ] || fail "delete-off removed a book"
+[ "$(read_file "$dest/Jörg & Söhne/Über den Berg.epub")" = "EPUB-200-v2" ] || fail "changed book not updated"
+[ -f "$dest/Ada Lovelace/Nested Comic.cbz" ] || fail "delete-off removed a book"
 
 sync_run 0 --config "$cfg" --dry-run --delete
-[ -f "$dest/Comics/Nested Comic/Nested.cbz" ] || fail "dry-run delete removed a file"
+[ -f "$dest/Ada Lovelace/Nested Comic.cbz" ] || fail "dry-run delete removed a file"
 grep -q 'would delete ' "$ERR" || fail "dry-run delete did not say so"
 
 sync_run 0 --config "$cfg" --delete
-[ ! -e "$dest/Comics/Nested Comic/Nested.cbz" ] || fail "delete left the removed book"
-[ ! -d "$dest/Comics" ] || fail "empty library directory remained"
+[ ! -e "$dest/Ada Lovelace/Nested Comic.cbz" ] || fail "delete left the removed book"
+[ ! -d "$dest/Ada Lovelace" ] || fail "empty author directory remained"
 assert_tree "$dest" "$(printf '%s\n' \
-    "Romane/Die Verwandlung/Die Verwandlung-c101.epub" \
-    "Romane/Die Verwandlung/Die Verwandlung.epub" \
-    "Romane/Über den Berg/Über den Berg.epub")"
+    "Franz Kafka/Die Verwandlung-dl-101-epub.epub" \
+    "Franz Kafka/Die Verwandlung.epub" \
+    "Jörg & Söhne/Über den Berg.epub")"
 
 # A failed catalogue must not delete tracked books.
 safe=$WORK/safe-books
 safe_state=$WORK/safe-state
-write_cfg "$cfg" "$safe" "$safe_state" library-series
+write_cfg "$cfg" "$safe" "$safe_state" author
 reset_control 1
 sync_run 0 --config "$cfg"
 reset_control 2
-touch "$CONTROL/fail-libraries"
+touch "$CONTROL/fail-books"
 sync_run 1 --config "$cfg" --delete
-[ -f "$safe/Comics/Nested Comic/Nested.cbz" ] || fail "failed sync deleted a book"
+[ -f "$safe/Ada Lovelace/Nested Comic.cbz" ] || fail "failed sync deleted a book"
 grep -q 'not deleting' "$ERR" || fail "missing delete skip warning"
-rm -f "$CONTROL/fail-libraries"
+rm -f "$CONTROL/fail-books"
 
 # One bad file must not leave a partial or wipe the rest.
 bad=$WORK/bad-books
 bad_state=$WORK/bad-state
-write_cfg "$cfg" "$bad" "$bad_state" library-series
+write_cfg "$cfg" "$bad" "$bad_state" author
 reset_control 1
-touch "$CONTROL/fail-chapter-100"
+touch "$CONTROL/fail-download-100"
 sync_run 1 --config "$cfg"
-[ ! -e "$bad/Romane/Die Verwandlung/Die Verwandlung.epub" ] || fail "failed chapter was stored"
-[ -f "$bad/Comics/Nested Comic/Nested.cbz" ] || fail "other books skipped after an error"
+[ ! -e "$bad/Franz Kafka/Die Verwandlung.epub" ] || fail "failed download was stored"
+[ -f "$bad/Ada Lovelace/Nested Comic.cbz" ] || fail "other books skipped after an error"
 find "$bad" -name '*.partial.*' -print | grep -q . && fail "partial left after error"
-rm -f "$CONTROL/fail-chapter-100"
+rm -f "$CONTROL/fail-download-100"
 
 # Off-host redirect must not be followed.
 evil=$WORK/evil-books
 evil_state=$WORK/evil-state
-write_cfg "$cfg" "$evil" "$evil_state" library-series
+write_cfg "$cfg" "$evil" "$evil_state" author
 reset_control 1
 touch "$CONTROL/include-evil"
 sync_run 1 --config "$cfg"
 grep -q 'refusing redirect' "$ERR" || fail "off-host redirect was not refused"
-[ ! -e "$evil/Evil/Stolen/stolen.epub" ] || fail "redirected book was saved"
+[ ! -e "$evil/Nobody/Stolen.epub" ] || fail "redirected book was saved"
 rm -f "$CONTROL/include-evil"
 
-# Author/series folders.
+# Series folders from the /opds/series section.
 layout=$WORK/layout-books
 layout_state=$WORK/layout-state
-write_cfg "$cfg" "$layout" "$layout_state" author-series
+write_cfg "$cfg" "$layout" "$layout_state" series
 reset_control 1
 sync_run 0 --config "$cfg"
-[ -f "$layout/Franz Kafka/Die Verwandlung/Die Verwandlung.epub" ] || fail "author-series layout"
-[ -f "$layout/Jörg & Söhne/Über den Berg/Über den Berg.epub" ] || fail "author layout unicode"
-[ -f "$layout/Ada Lovelace/Nested Comic/Nested.cbz" ] || fail "nested author layout"
+[ -f "$layout/Kafka Stories/Die Verwandlung.epub" ] || fail "series layout"
+[ -f "$layout/Kafka Stories/Die Verwandlung-dl-101-epub.epub" ] || fail "series layout collision"
+[ -f "$layout/Comics/Nested Comic.cbz" ] || fail "series layout comic"
+[ -f "$layout/Über den Berg.epub" ] || fail "book without series should be flat"
 
-# Wrong key.
-badkey=$WORK/badkey.conf
-write_cfg "$badkey" "$WORK/nowhere" "$WORK/nostate" library-series
-sed 's/^API_KEY=.*/API_KEY=wrong-key/' "$badkey" > "$WORK/badkey2.conf"
-sync_run 1 --config "$WORK/badkey2.conf"
-grep -q 'access denied' "$ERR" || fail "bad key was not reported"
+# Wrong password.
+badcred=$WORK/badcred.conf
+write_cfg "$badcred" "$WORK/nowhere" "$WORK/nostate" author
+sed 's/^PASSWORD=.*/PASSWORD=wrong-pass/' "$badcred" > "$WORK/badcred2.conf"
+sync_run 1 --config "$WORK/badcred2.conf"
+grep -q 'access denied' "$ERR" || fail "bad credentials were not reported"
 
-# Overlapping run.
+# Overlapping run. Hold the lock the same way the client does: flock when
+# available, otherwise the lockdir with a live pid.
 lock_state=$state
 mkdir -p "$lock_state"
-(
-    flock -n 9 || exit 1
-    sleep 20
-) 9>"$lock_state/kavita-sync.lock" &
-holder=$!
+holder=""
+if command -v flock >/dev/null 2>&1; then
+    (
+        flock -n 9 || exit 1
+        sleep 20
+    ) 9>"$lock_state/cwa-sync.lock" &
+    holder=$!
+else
+    mkdir "$lock_state/cwa-sync.lockdir"
+    printf '%s\n' "$$" > "$lock_state/cwa-sync.lockdir/pid"
+fi
 sleep 0.2
-write_cfg "$cfg" "$dest" "$lock_state" library-series
+write_cfg "$cfg" "$dest" "$lock_state" author
 sync_run 3 --config "$cfg" --dry-run
-kill "$holder" >/dev/null 2>&1 || true
-wait "$holder" >/dev/null 2>&1 || true
+if [ -n "$holder" ]; then
+    kill "$holder" >/dev/null 2>&1 || true
+    wait "$holder" >/dev/null 2>&1 || true
+else
+    rm -rf "$lock_state/cwa-sync.lockdir"
+fi
 
 if [ "${SKIP_WGET:-}" != 1 ]; then
     wdest=$WORK/wget-books
     wstate=$WORK/wget-state
-    write_cfg "$cfg" "$wdest" "$wstate" library-series
+    write_cfg "$cfg" "$wdest" "$wstate" author
     reset_control 1
     : > "$CONTROL/stats.tsv"
-    KAVITA_HTTP_CLIENT=wget sync_run 0 --config "$cfg"
+    CWA_HTTP_CLIENT=wget sync_run 0 --config "$cfg"
     assert_tree "$wdest" "$EXPECTED"
-    KAVITA_HTTP_CLIENT=wget sync_run 0 --config "$cfg"
-    [ "$(hits 304 /chapter/100/download/)" -ge 1 ] || fail "wget did not use conditional GET"
-    [ "$(read_file "$wdest/Romane/Die Verwandlung/Die Verwandlung.epub")" = "EPUB-100-v1" ] || fail "wget 304 clobber"
+    CWA_HTTP_CLIENT=wget sync_run 0 --config "$cfg"
+    [ "$(hits 304 /opds/download/100/epub/)" -ge 1 ] || fail "wget did not use conditional GET"
+    [ "$(read_file "$wdest/Franz Kafka/Die Verwandlung.epub")" = "EPUB-100-v1" ] || fail "wget 304 clobber"
 
     wrap=$WORK/bin
     mkdir -p "$wrap"
@@ -420,11 +441,11 @@ EOF
     write_cfg "$cfg" "$bdest" "$bstate" flat
     reset_control 1
     : > "$CONTROL/stats.tsv"
-    KAVITA_HTTP_CLIENT=wget KAVITA_WGET="$wrap/wget" sync_run 0 --config "$cfg"
+    CWA_HTTP_CLIENT=wget CWA_WGET="$wrap/wget" sync_run 0 --config "$cfg"
     [ -f "$bdest/Die Verwandlung.epub" ] || fail "busybox wget did not download"
-    [ -f "$bdest/Nested.cbz" ] || fail "busybox wget missed nested book"
-    KAVITA_HTTP_CLIENT=wget KAVITA_WGET="$wrap/wget" sync_run 0 --config "$cfg"
-    [ "$(hits 304 /chapter/3/download/)" -ge 1 ] || fail "busybox wget missed 304"
+    [ -f "$bdest/Nested Comic.cbz" ] || fail "busybox wget missed nested book"
+    CWA_HTTP_CLIENT=wget CWA_WGET="$wrap/wget" sync_run 0 --config "$cfg"
+    [ "$(hits 304 /opds/download/100/epub/)" -ge 1 ] || fail "busybox wget missed 304"
 fi
 
-printf 'ok (%s)\n' "$KAVITA_TEST_SH"
+printf 'ok (%s)\n' "$CWA_TEST_SH"

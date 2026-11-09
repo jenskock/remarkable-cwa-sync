@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
-"""Local Kavita-like OPDS server for tests. Not installed on the tablet."""
+"""Local calibre-web-like OPDS server for tests. Not installed on the tablet.
 
+Emulates the OPDS catalog of a calibre-web instance as run by the
+crocodilestick/calibre-web-automated:latest container: HTTP basic auth on
+/opds, subsection navigation feeds (books/authors/series/tags), one
+acquisition link per format under /opds/download/<book_id>/<format>/, and
+?offset=N pagination.
+"""
+
+import base64
 import os
 import re
 import sys
@@ -8,8 +16,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-KEY = "test-key"
+USER = "test-user"
+PASSWORD = "test-pass"
+CRED = "Basic " + base64.b64encode(f"{USER}:{PASSWORD}".encode("utf-8")).decode("ascii")
 CONTROL = ""
+PORT = 0
 LOCK = threading.Lock()
 
 
@@ -41,158 +52,159 @@ def xml(text):
     )
 
 
-def feed(title, body, extra=""):
-    return f"""<?xml version="1.0" encoding="utf-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:pse="http://vaemendis.net/opds-pse/ns">
-<updated>2026-01-01T00:00:00</updated>
-<id>{xml(title)}</id>
-<title>{xml(title)}</title>
-<author><name>Kavita</name><uri>https://kavitareader.com</uri></author>
-<link rel="self" type="application/atom+xml;profile=opds-catalog;kind=navigation" href="/api/opds/{KEY}" />
-<link rel="start" type="application/atom+xml;profile=opds-catalog;kind=navigation" href="/api/opds/{KEY}" />
-{extra}
+# id, title, author, series, tag, formats [(format, mime)]
+def all_books():
+    books = [
+        ("100", "Die Verwandlung", "Franz Kafka", "Kafka Stories", "Romane", [("epub", "application/epub+zip")]),
+        ("101", "Die Verwandlung", "Franz Kafka", "Kafka Stories", "Romane", [("epub", "application/epub+zip")]),
+        ("200", "Über den Berg", "Jörg & Söhne", None, "Romane", [("epub", "application/epub+zip")]),
+        ("12", "Nested Comic", "Ada Lovelace", "Comics", "Comics", [("cbz", "application/x-cbz")]),
+    ]
+    if version() >= 2:
+        books = [b for b in books if b[0] != "12"]
+    return books
+
+
+AUTHOR_IDS = {"Franz Kafka": "1", "Jörg & Söhne": "2", "Ada Lovelace": "3"}
+TAG_IDS = {"Romane": "1", "Comics": "2"}
+SERIES_IDS = {"Kafka Stories": "5", "Comics": "6"}
+
+
+def feed(title, body, path, extra=""):
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/terms/" xmlns:dcterms="http://purl.org/dc/terms/">
+  <id>urn:uuid:2853dacf-ed79-42f5-8e8a-a7bb3d1ae6a2</id>
+  <updated>2026-01-01T00:00:00+00:00</updated>
+  <link rel="self" href="{path}" type="application/atom+xml;profile=opds-catalog;type=feed;kind=navigation"/>
+  <link rel="start" href="/opds" type="application/atom+xml;profile=opds-catalog;type=feed;kind=navigation"/>
+  <link rel="up" href="/opds" type="application/atom+xml;profile=opds-catalog;type=feed;kind=navigation"/>
+{extra}  <link rel="search" href="/opds/osd" type="application/opensearchdescription+xml"/>
+  <title>{xml(title)}</title>
+  <author>
+    <name>calibre-web</name>
+    <uri>https://github.com/janeczku/calibre-web</uri>
+  </author>
 {body}
 </feed>
 """
 
 
-def nav(entry_id, title, author, href):
-    author_xml = f"<author><name>{xml(author)}</name></author>" if author else ""
-    return f"""<entry>
-<id>{entry_id}</id>
-<title>{xml(title)}</title>
-{author_xml}
-<link rel="http://opds-spec.org/image" type="image/jpeg" href="/api/image/cover?id={entry_id}&amp;apiKey={KEY}" />
-<link rel="subsection" type="application/atom+xml;profile=opds-catalog;kind=navigation" href="{href}" />
-</entry>
+def nav(title, href):
+    return f"""  <entry>
+    <title>{xml(title)}</title>
+    <id>http://127.0.0.1:{PORT}{href}</id>
+    <link rel="subsection" type="application/atom+xml;profile=opds-catalog" href="{href}"/>
+  </entry>
 """
 
 
-def book(entry_id, title, author, href, mime, link_title):
-    return f"""<entry>
-<id>{entry_id}</id>
-<title>{xml(title)}</title>
-<author><name>{xml(author)}</name></author>
-<link rel="http://opds-spec.org/image" type="image/jpeg" href="/api/image/chapter-cover?chapterId={entry_id}&amp;apiKey={KEY}" />
-<link rel="http://opds-spec.org/acquisition/open-access" type="{mime}" href="{href}" title="{link_title}" pse:count="10" />
-<link rel="http://vaemendis.net/opds-pse/stream" type="image/jpeg" href="/api/opds/{KEY}/image?chapterId={entry_id}&amp;pageNumber={{pageNumber}}" />
-</entry>
+def book_entry(b):
+    bid, title, author, series, tag, formats = b
+    links = ""
+    for fmt, mime in formats:
+        links += (
+            f'    <link rel="http://opds-spec.org/acquisition" href="/opds/download/{bid}/{fmt}/" '
+            f'length="10" title="{fmt.upper()}" mtime="2026-01-01T00:00:00+00:00" type="{mime}"/>\n'
+        )
+    series_html = f"SERIES: {xml(series)} [1.00]<br/>" if series else ""
+    return f"""  <entry>
+    <title>{xml(title)}</title>
+    <id>urn:uuid:book-{bid}</id>
+    <updated>2026-01-01T00:00:00+00:00</updated>
+    <author>
+      <name>{xml(author)}</name>
+    </author>
+    <published>2026-01-01T00:00:00+00:00</published>
+    <dcterms:language>eng</dcterms:language>
+    <category scheme="http://www.bisg.org/standards/bisac_subject/index.html" term="{xml(tag)}" label="{xml(tag)}"/>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">{series_html}</div></content>
+    <link type="image/jpeg" href="/opds/cover/{bid}" rel="http://opds-spec.org/image"/>
+{links}  </entry>
 """
 
 
-def libraries_feed():
-    body = nav("1", "Romane", "", f"/api/opds/{KEY}/libraries/1")
-    body += nav("2", "Comics", "", f"/api/opds/{KEY}/libraries/2")
+def root_feed():
+    # Section order matters for the sync tests: series first, so books are
+    # first seen with a series context (dedupe keeps the first record).
+    body = nav("Series", "/opds/series")
+    body += nav("Tags", "/opds/category")
+    body += nav("Authors", "/opds/author")
+    body += nav("Books", "/opds/books")
+    return feed("calibre-web", body, "/opds")
+
+
+def series_index_feed():
+    body = ""
+    for name, sid in SERIES_IDS.items():
+        body += nav(name, f"/opds/series/{sid}")
+    return feed("Series", body, "/opds/series")
+
+
+def series_feed(sid):
+    name = next((n for n, i in SERIES_IDS.items() if i == sid), None)
+    if name is None:
+        return None
+    body = "".join(book_entry(b) for b in all_books() if b[3] == name)
+    return feed(name, body, f"/opds/series/{sid}")
+
+
+def category_index_feed():
+    body = "".join(nav(name, f"/opds/category/{tid}") for name, tid in TAG_IDS.items())
     if flag("include-evil"):
-        body += nav("9", "Evil", "", f"/api/opds/{KEY}/series/99")
-    return feed("Libraries", body)
+        body += nav("Evil", "/opds/category/99")
+    return feed("Tags", body, "/opds/category")
 
 
-def library_feed(library_id, page):
-    if library_id == "1" and page == "1":
+def category_feed(tid):
+    if tid == "99" and flag("include-evil"):
+        return feed("Evil", book_entry(("999", "Stolen", "Nobody", None, "Evil", [("epub", "application/epub+zip")])), "/opds/category/99")
+    name = next((n for n, i in TAG_IDS.items() if i == tid), None)
+    if name is None:
+        return None
+    body = "".join(book_entry(b) for b in all_books() if b[4] == name)
+    return feed(name, body, f"/opds/category/{tid}")
+
+
+def author_index_feed():
+    body = "".join(nav(name, f"/opds/author/{aid}") for name, aid in AUTHOR_IDS.items())
+    return feed("Authors", body, "/opds/author")
+
+
+def author_feed(aid):
+    name = next((n for n, i in AUTHOR_IDS.items() if i == aid), None)
+    if name is None:
+        return None
+    body = "".join(book_entry(b) for b in all_books() if b[2] == name)
+    return feed(name, body, f"/opds/author/{aid}")
+
+
+PAGE_SIZE = 2
+
+
+def books_feed(offset):
+    books = all_books()
+    page = books[offset:offset + PAGE_SIZE]
+    body = "".join(book_entry(b) for b in page)
+    extra = ""
+    if offset + PAGE_SIZE < len(books):
         extra = (
-            f'<link rel="next" type="application/atom+xml;profile=opds-catalog;kind=navigation" '
-            f'href="/api/opds/{KEY}/libraries/1?pageNumber=2" />'
+            f'  <link rel="next" title="Next" href="/opds/books?offset={offset + PAGE_SIZE}" '
+            f'type="application/atom+xml;profile=opds-catalog;type=feed;kind=navigation"/>\n'
         )
-        body = nav("10", "Die Verwandlung", "Franz Kafka", f"/api/opds/{KEY}/series/10")
-        return feed("Romane", body, extra)
-    if library_id == "1" and page == "2":
-        body = nav("11", "Über den Berg", "Jörg & Söhne", f"/api/opds/{KEY}/series/11")
-        return feed("Romane", body)
-    if library_id == "2":
-        if version() >= 2:
-            return feed("Comics", "")
-        body = nav("12", "Nested Comic", "Ada Lovelace", f"/api/opds/{KEY}/series/12")
-        return feed("Comics", body)
-    return None
+    return feed("Books", body, "/opds/books", extra)
 
 
-def series_feed(series_id):
-    if series_id == "10":
-        href = f"/api/opds/{KEY}/series/10/volume/1/chapter/100/download/Die%20Verwandlung.epub"
-        body = book(
-            "100",
-            "Weiterlesen: Die Verwandlung",
-            "Franz Kafka",
-            href,
-            "application/epub+zip",
-            "Die%20Verwandlung.epub",
-        )
-        body += book(
-            "100",
-            "Die Verwandlung",
-            "Franz Kafka",
-            href,
-            "application/epub+zip",
-            "Die%20Verwandlung.epub",
-        )
-        body += book(
-            "101",
-            "Die Verwandlung",
-            "Franz Kafka",
-            f"/api/opds/{KEY}/series/10/volume/1/chapter/101/download/Die%20Verwandlung.epub",
-            "application/epub+zip",
-            "Die%20Verwandlung.epub",
-        )
-        return feed("Die Verwandlung", body)
-    if series_id == "11":
-        body = book(
-            "200",
-            "Über den Berg",
-            "Jörg & Söhne",
-            f"/api/opds/{KEY}/series/11/volume/4/chapter/200/download/%C3%9Cber%20den%20Berg.epub",
-            "application/epub+zip",
-            "%C3%9Cber%20den%20Berg.epub",
-        )
-        return feed("Über den Berg", body)
-    if series_id == "12":
-        body = nav("1", "Volume 1", "", f"/api/opds/{KEY}/series/12/volume/1")
-        return feed("Nested Comic", body)
-    if series_id == "99" and flag("include-evil"):
-        body = book(
-            "999",
-            "Stolen",
-            "Nobody",
-            f"/api/opds/{KEY}/series/99/volume/1/chapter/999/download/stolen.epub",
-            "application/epub+zip",
-            "stolen.epub",
-        )
-        return feed("Evil", body)
-    return None
-
-
-def volume_feed(series_id, volume_id):
-    if series_id == "12" and volume_id == "1":
-        body = nav("3", "Chapter 3", "Ada Lovelace", f"/api/opds/{KEY}/series/12/volume/1/chapter/3")
-        return feed("Nested Comic Volume", body)
-    return None
-
-
-def chapter_feed(series_id, volume_id, chapter_id):
-    if series_id == "12" and volume_id == "1" and chapter_id == "3":
-        body = book(
-            "3",
-            "Chapter 3",
-            "Ada Lovelace",
-            f"/api/opds/{KEY}/series/12/volume/1/chapter/3/download/Nested.cbz",
-            "application/x-cbz",
-            "Nested.cbz",
-        )
-        return feed("Nested Comic Chapter", body)
-    return None
-
-
-def book_payload(chapter_id):
-    if chapter_id == "100":
+def book_payload(book_id, fmt):
+    if book_id == "100":
         return b"EPUB-100-v1", '"100-v1"', "application/epub+zip", "Die Verwandlung.epub"
-    if chapter_id == "101":
+    if book_id == "101":
         return b"EPUB-101-v1", '"101-v1"', "application/epub+zip", "Die Verwandlung.epub"
-    if chapter_id == "200":
+    if book_id == "200":
         if version() >= 2:
-            return b"EPUB-11-v2", '"200-v2"', "application/epub+zip", "Über den Berg.epub"
-        return b"EPUB-11-v1", '"200-v1"', "application/epub+zip", "Über den Berg.epub"
-    if chapter_id == "3":
-        return b"CBZ-12-v1", '"3-v1"', "application/x-cbz", "Nested.cbz"
+            return b"EPUB-200-v2", '"200-v2"', "application/epub+zip", "Über den Berg.epub"
+        return b"EPUB-200-v1", '"200-v1"', "application/epub+zip", "Über den Berg.epub"
+    if book_id == "12" and fmt == "cbz":
+        return b"CBZ-12-v1", '"12-v1"', "application/x-cbz", "Nested.cbz"
     return None
 
 
@@ -212,58 +224,62 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch(self, path, query, inm):
         if path == "/health":
             return self._bytes(200, b"ok", "text/plain")
-        match = re.match(r"^/api/opds/([^/]+)(/.*)?$", path)
-        if not match:
+        if not path.startswith("/opds"):
             return self._bytes(404, b"not found", "text/plain")
-        key = match.group(1)
-        rest = match.group(2) or ""
+        if self.headers.get("Authorization") != CRED:
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="calibre-web"')
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "9")
+            self.end_headers()
+            self.wfile.write(b"bad login")
+            return 401
+        rest = path[len("/opds"):]
         if rest.endswith("/") and rest != "/":
             rest = rest.rstrip("/")
-        if key != KEY:
-            return self._bytes(401, b"bad api key", "text/plain")
-        if flag("fail-libraries") and (rest == "/libraries" or rest.startswith("/libraries/")):
-            return self._bytes(500, b"feed failed", "text/plain")
-        page = parse_qs(query).get("pageNumber", ["1"])[0]
+        offset = int(parse_qs(query).get("offset", ["0"])[0])
         if rest in ("", "/"):
-            return self._xml(libraries_feed())
-        if rest == "/libraries":
-            return self._xml(libraries_feed())
-        library = re.match(r"^/libraries/(\d+)$", rest)
-        if library:
-            body = library_feed(library.group(1), page)
-            if body is None:
-                return self._bytes(404, b"no library", "text/plain")
-            return self._xml(body)
-        series = re.match(r"^/series/(\d+)$", rest)
-        if series:
-            body = series_feed(series.group(1))
+            return self._xml(root_feed())
+        if rest == "/books":
+            if flag("fail-books"):
+                return self._bytes(500, b"feed failed", "text/plain")
+            return self._xml(books_feed(offset))
+        if rest == "/series":
+            return self._xml(series_index_feed())
+        m = re.match(r"^/series/([^/]+)$", rest)
+        if m:
+            body = series_feed(m.group(1))
             if body is None:
                 return self._bytes(404, b"no series", "text/plain")
             return self._xml(body)
-        volume = re.match(r"^/series/(\d+)/volume/(\d+)$", rest)
-        if volume:
-            body = volume_feed(volume.group(1), volume.group(2))
+        if rest == "/category":
+            return self._xml(category_index_feed())
+        m = re.match(r"^/category/([^/]+)$", rest)
+        if m:
+            body = category_feed(m.group(1))
             if body is None:
-                return self._bytes(404, b"no volume", "text/plain")
+                return self._bytes(404, b"no tag", "text/plain")
             return self._xml(body)
-        chapter = re.match(r"^/series/(\d+)/volume/(\d+)/chapter/(\d+)$", rest)
-        if chapter:
-            body = chapter_feed(chapter.group(1), chapter.group(2), chapter.group(3))
+        if rest == "/author":
+            return self._xml(author_index_feed())
+        m = re.match(r"^/author/([^/]+)$", rest)
+        if m:
+            body = author_feed(m.group(1))
             if body is None:
-                return self._bytes(404, b"no chapter", "text/plain")
+                return self._bytes(404, b"no author", "text/plain")
             return self._xml(body)
-        download = re.match(r"^/series/(\d+)/volume/(\d+)/chapter/(\d+)/download/.+$", rest)
-        if download:
-            chapter_id = download.group(3)
-            if chapter_id == "999":
+        m = re.match(r"^/download/([^/]+)/([^/]+)/?$", rest)
+        if m:
+            book_id, fmt = m.group(1), m.group(2)
+            if book_id == "999":
                 self.send_response(302)
                 self.send_header("Location", "http://127.0.0.1:1/stolen")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return 302
-            if chapter_id == "100" and flag("fail-chapter-100"):
+            if book_id == "100" and flag("fail-download-100"):
                 return self._bytes(500, b"nope", "text/plain")
-            payload = book_payload(chapter_id)
+            payload = book_payload(book_id, fmt)
             if payload is None:
                 return self._bytes(404, b"no file", "text/plain")
             data, etag, mime, filename = payload
@@ -293,18 +309,18 @@ class Handler(BaseHTTPRequestHandler):
         return code
 
     def _xml(self, text):
-        return self._bytes(200, text.encode("utf-8"), "application/xml; charset=utf-8")
+        return self._bytes(200, text.encode("utf-8"), "application/atom+xml; charset=utf-8")
 
 
 def main():
-    global CONTROL
+    global CONTROL, PORT
     if len(sys.argv) != 3:
         print("usage: mock_opds.py PORT CONTROL_DIR", file=sys.stderr)
         return 2
-    port = int(sys.argv[1])
+    PORT = int(sys.argv[1])
     CONTROL = sys.argv[2]
     os.makedirs(CONTROL, exist_ok=True)
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.serve_forever()
     return 0
 

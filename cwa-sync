@@ -1,5 +1,6 @@
 #!/bin/sh
-# Mirror a Kavita library onto a reMarkable 2 for Plato.
+# Mirror a calibre-web (crocodilestick/calibre-web-automated) OPDS catalog
+# onto a reMarkable 2 for Plato.
 # Target shell: BusyBox ash (/bin/sh on the tablet). No bash, Python, or jq.
 
 set -eu -f
@@ -31,11 +32,11 @@ BASE=$(CDPATH='' cd -- "$(dirname -- "$script")" && pwd)
 
 usage() {
     cat <<'EOF'
-Usage: kavita-sync [--config FILE] [--dry-run] [--delete] [--force] [--verbose]
+Usage: cwa-sync [--config FILE] [--dry-run] [--delete] [--force] [--verbose]
 
-Mirror Kavita OPDS books into DEST (default /home/root/plato-media).
+Mirror calibre-web OPDS books into DEST (default /home/root/plato-media).
 
-  --config FILE   config file (default: /home/root/.config/kavita-sync.conf)
+  --config FILE   config file (default: /home/root/.config/cwa-sync.conf)
   --dry-run       list actions; do not download, delete, or update the manifest
   --delete        remove tracked local books that are no longer on the server
   --force         download every file even when it looks unchanged
@@ -43,6 +44,10 @@ Mirror Kavita OPDS books into DEST (default /home/root/plato-media).
   --help          show this help
 
 Exit status: 0 ok, 1 sync error, 2 usage or config error, 3 already running.
+
+The server is a calibre-web OPDS catalog (OPDS_PATH, default /opds),
+authenticated with HTTP basic auth (USERNAME/PASSWORD). A
+crocodilestick/calibre-web-automated:latest container serves it on port 8083.
 EOF
 }
 
@@ -50,14 +55,14 @@ resolve_config_path() {
     if [ -n "$CONFIG" ]; then
         return 0
     fi
-    if [ -n "${KAVITA_SYNC_CONFIG:-}" ]; then
-        CONFIG=$KAVITA_SYNC_CONFIG
-    elif [ -f /home/root/.config/kavita-sync.conf ]; then
-        CONFIG=/home/root/.config/kavita-sync.conf
-    elif [ -f "$BASE/kavita-sync.conf" ]; then
-        CONFIG=$BASE/kavita-sync.conf
+    if [ -n "${CWA_SYNC_CONFIG:-}" ]; then
+        CONFIG=$CWA_SYNC_CONFIG
+    elif [ -f /home/root/.config/cwa-sync.conf ]; then
+        CONFIG=/home/root/.config/cwa-sync.conf
+    elif [ -f "$BASE/cwa-sync.conf" ]; then
+        CONFIG=$BASE/cwa-sync.conf
     else
-        CONFIG=/home/root/.config/kavita-sync.conf
+        CONFIG=/home/root/.config/cwa-sync.conf
     fi
 }
 
@@ -114,7 +119,9 @@ main() {
     fi
     resolve_config_path
     SERVER_URL=""
-    API_KEY=""
+    OPDS_PATH=""
+    USERNAME=""
+    PASSWORD=""
     DEST=""
     LAYOUT=""
     STATE_DIR=""
@@ -124,6 +131,7 @@ main() {
     INSECURE=0
     load_config
     validate_config
+    setup_auth
     if [ "$delete_cli" = 1 ] || is_true "$DELETE_MISSING"; then
         DELETE=1
     fi

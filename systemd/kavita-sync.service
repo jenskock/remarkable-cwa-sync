@@ -1,7 +1,0 @@
-[Unit]
-Description=Mirror Kavita books into Plato
-
-[Service]
-Type=oneshot
-ExecStart=/home/root/kavita-sync/kavita-sync
-Nice=10

@@ -1,21 +1,37 @@
-# kavita-sync
+# cwa-sync
 
-Spiegelt die E-Books eines selbst gehosteten [Kavita](https://github.com/Kareadita/Kavita)-Servers auf ein reMarkable 2, in das Verzeichnis, aus dem [Plato](https://github.com/baskerville/plato) liest.
+Spiegelt die E-Books eines selbst gehosteten [calibre-web](https://github.com/janeczku/calibre-web)-Servers — zum Beispiel aus dem Docker-Image [`crocodilestick/calibre-web-automated:latest`](https://github.com/crocodilestick/Calibre-Web-Automated) — auf ein reMarkable 2, in das Verzeichnis, aus dem [Plato](https://github.com/baskerville/plato) liest.
 
-Das Programm läuft auf dem Tablet (Firmware 3.28, BusyBox-`sh`, kein Paketmanager). Es spricht Kavitas OPDS-Feed (`/api/opds/<API_KEY>`), lädt epub, pdf, cbz und die übrigen Dateien herunter und lässt Dateien liegen, die sich nicht geändert haben.
+Das Programm läuft auf dem Tablet (Firmware 3.28, BusyBox-`sh`, kein Paketmanager). Es spricht den OPDS-Katalog von calibre-web (`/opds`, HTTP-Basic-Auth mit Benutzername und Passwort), lädt epub, pdf, cbz und die übrigen Formate herunter und lässt Dateien liegen, die sich nicht geändert haben.
 
 Firmware-Updates löschen das Root-Dateisystem. Alles, was bleiben soll, liegt deshalb unter `/home/root`.
 
-## API-Schlüssel
+## Server
 
-In Kavita, als der Benutzer, dessen Bibliothek synchronisiert werden soll:
+Das Image `crocodilestick/calibre-web-automated:latest` lauscht standardmäßig auf Port 8083 (änderbar über `CWA_PORT_OVERRIDE` im Container), der OPDS-Katalog liegt unter `http://<host>:8083/opds`:
 
-1. Benutzermenü → **Settings** → **3rd party clients / OPDS**.
-2. OPDS für diesen Benutzer einschalten.
-3. Den Schlüssel aus der OPDS-URL kopieren. Sie hat die Form `https://books.jenskock.de/api/opds/<API_KEY>`.
-4. Dem Benutzer das Recht zum **Herunterladen** geben. Ohne dieses Recht antwortet der Server mit 401 oder 403, und es kommt keine Datei an.
+```sh
+docker run -d --name calibre-web-automated \
+  -p 8083:8083 \
+  -v /srv/cwa/config:/config \
+  -v /srv/cwa/library:/calibre-library \
+  -v /srv/cwa/ingest:/cwa-book-ingest \
+  crocodilestick/calibre-web-automated:latest
+```
 
-Der Schlüssel und die Server-URL stehen nur in der Konfiguration auf dem Tablet, nicht in diesem Repository.
+## Zugangsdaten
+
+calibre-web nutzt für OPDS HTTP-Basic-Auth — Benutzername und Passwort des Web-Logins, nicht einen API-Schlüssel in der URL. Im Container ist der anonyme Zugriff abgeschaltet, es werden also immer Zugangsdaten gebraucht.
+
+In calibre-web, für den Benutzer, dessen Bibliothek synchronisiert werden soll:
+
+1. Admin-Bereich → Benutzer bearbeiten → dem Benutzer **OPDS** erlauben.
+2. Dem Benutzer das Recht **Herunterladen** geben. Ohne dieses Recht antwortet `/opds/download/...` mit 401, und es kommt keine Datei an.
+3. Benutzername und Passwort in die Konfiguration auf dem Tablet eintragen (`USERNAME`, `PASSWORD`).
+
+Der Server muss nicht öffentlich erreichbar sein; ein Zugriff aus dem LAN genügt, solange das Tablet ihn erreicht.
+
+Benutzername, Passwort und Server-URL stehen nur in der Konfiguration auf dem Tablet, nicht in diesem Repository.
 
 ## Installation
 
@@ -24,45 +40,45 @@ Das Tablet per USB anschließen. Die Netzwerkadresse ist in der Regel `10.11.99.
 Vom Rechner aus, im Verzeichnis dieses Repositories:
 
 ```sh
-scp -r . root@10.11.99.1:/home/root/kavita-sync
-ssh root@10.11.99.1 'sh /home/root/kavita-sync/install.sh'
+scp -r . root@10.11.99.1:/home/root/cwa-sync
+ssh root@10.11.99.1 'sh /home/root/cwa-sync/install.sh'
 ```
 
-Auf dem Tablet, wenn die Dateien schon unter `/home/root/kavita-sync` liegen:
+Auf dem Tablet, wenn die Dateien schon unter `/home/root/cwa-sync` liegen:
 
 ```sh
-sh /home/root/kavita-sync/install.sh
+sh /home/root/cwa-sync/install.sh
 ```
 
 `install.sh` legt an:
 
 | Pfad | Inhalt |
 | --- | --- |
-| `/home/root/kavita-sync/` | Skript, Bibliotheken, Beispielkonfiguration |
-| `/home/root/.local/bin/kavita-sync` | Symlink |
-| `/home/root/.config/kavita-sync.conf` | Konfiguration, Modus 600, wird nie überschrieben |
+| `/home/root/cwa-sync/` | Skript, Bibliotheken, Beispielkonfiguration |
+| `/home/root/.local/bin/cwa-sync` | Symlink |
+| `/home/root/.config/cwa-sync.conf` | Konfiguration, Modus 600, wird nie überschrieben |
 | `/home/root/plato-media/` | Zielverzeichnis für Plato |
 | `/home/root/.profile` | PATH-Ergänzung zwischen zwei Markierungszeilen |
 
 Danach die Konfiguration bearbeiten:
 
 ```sh
-vi /home/root/.config/kavita-sync.conf
+vi /home/root/.config/cwa-sync.conf
 ```
 
-`API_KEY=` eintragen. `SERVER_URL` steht im Beispiel bereits auf `https://books.jenskock.de`.
+`SERVER_URL` auf den Container-Host mit Port (z. B. `http://192.168.1.10:8083`) setzen, dazu `USERNAME` und `PASSWORD` eintragen.
 
-Wenn `kavita-sync` danach nicht im PATH liegt, einmal `source /home/root/.profile` ausführen oder das Programm über den vollen Pfad starten:
+Wenn `cwa-sync` danach nicht im PATH liegt, einmal `source /home/root/.profile` ausführen oder das Programm über den vollen Pfad starten:
 
 ```sh
-/home/root/kavita-sync/kavita-sync --dry-run
+/home/root/cwa-sync/cwa-sync --dry-run
 ```
 
 ### HTTPS
 
-`books.jenskock.de` ist HTTPS und steht hinter Cloudflare. Das wget von BusyBox auf dem reMarkable spricht kein TLS. `install.sh` prüft, ob `curl` oder ein wget mit HTTPS vorhanden ist. Fehlt beides, lädt es das statische wget von Toltec über HTTP nach `/home/root/.local/bin/wget` und prüft die SHA-256-Summe, bevor es die Datei aktiviert. Dasselbe erzwingt `--fetch-wget`.
+Läuft calibre-web hinter einem Reverse Proxy mit HTTPS, braucht das Tablet einen TLS-fähigen Client. Das wget von BusyBox auf dem reMarkable spricht kein TLS. `install.sh` prüft, ob `curl` oder ein wget mit HTTPS vorhanden ist. Fehlt beides, lädt es das statische wget von Toltec über HTTP nach `/home/root/.local/bin/wget` und prüft die SHA-256-Summe, bevor es die Datei aktiviert. Dasselbe erzwingt `--fetch-wget`.
 
-Cloudflare blockiert oft einen nackten wget-User-Agent. Die Beispielkonfiguration setzt deshalb einen normalen Browser-Agenten. Steht in der Logdatei, die Antwort sei kein OPDS-Feed, den `USER_AGENT` in der Konfiguration setzen.
+Manche Reverse Proxies blockieren einen nackten wget-User-Agent. Die Beispielkonfiguration setzt deshalb einen normalen Browser-Agenten. Steht in der Logdatei, die Antwort sei kein OPDS-Feed, den `USER_AGENT` in der Konfiguration setzen.
 
 ### Optionen von install.sh
 
@@ -74,15 +90,17 @@ sh install.sh [--prefix DIR] [--timer] [--fetch-wget]
 
 ## Konfiguration
 
-Die Datei ist `KEY=VALUE` und wird nicht als Shell-Skript ausgeführt. Vorlage: `kavita-sync.conf.example`.
+Die Datei ist `KEY=VALUE` und wird nicht als Shell-Skript ausgeführt. Vorlage: `cwa-sync.conf.example`.
 
 | Schlüssel | Bedeutung |
 | --- | --- |
-| `SERVER_URL` | Origin von Kavita, ohne Schrägstrich am Ende. Ein Unterpfad ist erlaubt. |
-| `API_KEY` | OPDS-Schlüssel. Erlaubt sind Buchstaben, Ziffern, Punkt, Unterstrich und Bindestrich. |
+| `SERVER_URL` | Origin des calibre-web-Containers, ohne Schrägstrich am Ende, z. B. `http://192.168.1.10:8083`. Ein Unterpfad hinter einem Reverse Proxy ist erlaubt. |
+| `OPDS_PATH` | Pfad des OPDS-Katalogs. Vorgabe `/opds`. |
+| `USERNAME` | calibre-web-Benutzername für HTTP-Basic-Auth. |
+| `PASSWORD` | Passwort des Benutzers. |
 | `DEST` | Absolutes Zielverzeichnis. Vorgabe `/home/root/plato-media`. `/`, `/home` und `/home/root` werden abgelehnt. |
-| `LAYOUT` | Ordnerstruktur, siehe unten. Vorgabe `library-series`. |
-| `STATE_DIR` | Manifest und Sperre. Vorgabe `/home/root/.local/share/kavita-sync`. |
+| `LAYOUT` | Ordnerstruktur, siehe unten. Vorgabe `author`. |
+| `STATE_DIR` | Manifest und Sperre. Vorgabe `/home/root/.local/share/cwa-sync`. |
 | `DELETE_MISSING` | `1`, damit verschwundene Bücher gelöscht werden. Vorgabe `0`. |
 | `USER_AGENT` | HTTP-User-Agent. |
 | `CA_CERT` | Optionales CA-Bundle, falls die Zertifikatsprüfung scheitert. |
@@ -96,21 +114,23 @@ Die Datei ist `KEY=VALUE` und wird nicht als Shell-Skript ausgeführt. Vorlage: 
 | `series` | `Serie/Titel.epub` |
 | `author` | `Autor/Titel.epub` |
 | `author-series` | `Autor/Serie/Titel.epub` |
-| `library` | `Bibliothek/Titel.epub` |
-| `library-series` | `Bibliothek/Serie/Titel.epub` |
-| `library-author-series` | `Bibliothek/Autor/Serie/Titel.epub` |
+| `library` | `Tag/Titel.epub` |
+| `library-series` | `Tag/Serie/Titel.epub` |
+| `library-author-series` | `Tag/Autor/Serie/Titel.epub` |
 
-Zeichen, die auf dem Dateisystem stören (`/ \ : * ? " < > |`), werden durch `-` ersetzt. Zwei Kapitel mit demselben Dateinamen bekommen ein Suffix wie `-c101`.
+calibre-web trägt den Autor an jeden Bucheintrag; Serie und Tag ergeben sich aus dem Katalogbereich, in dem das Buch zuerst gefunden wurde (`/opds/series/<id>`, `/opds/category/<id>`). Eine Ebene, die leer ist, wird ausgelassen (`author-series` ohne Serie wird zu `Autor/Titel.epub`).
+
+Zeichen, die auf dem Dateisystem stören (`/ \ : * ? " < > |`), werden durch `-` ersetzt. Zwei Bücher mit demselben Dateinamen bekommen ein Suffix aus ihrem Katalogschlüssel, etwa `Die Verwandlung-dl-101-epub.epub`.
 
 ## Benutzung
 
 ```sh
-kavita-sync --dry-run          # Katalog holen, nichts schreiben
-kavita-sync                    # neue und geänderte Dateien laden
-kavita-sync --delete           # zusätzlich lokal entfernen, was der Server nicht mehr führt
-kavita-sync --force            # jede Datei neu laden, auch wenn sie unverändert wirkt
-kavita-sync --verbose          # jede Katalog-Anfrage protokollieren
-kavita-sync --config DATEI     # andere Konfiguration
+cwa-sync --dry-run          # Katalog holen, nichts schreiben
+cwa-sync                    # neue und geänderte Dateien laden
+cwa-sync --delete           # zusätzlich lokal entfernen, was der Server nicht mehr führt
+cwa-sync --force            # jede Datei neu laden, auch wenn sie unverändert wirkt
+cwa-sync --verbose          # jede Katalog-Anfrage protokollieren
+cwa-sync --config DATEI     # andere Konfiguration
 ```
 
 `--dry-run` lädt die OPDS-Feeds, schreibt aber keine Bücher, löscht nichts und ändert das Manifest nicht. Die Zeilen lauten `would download`, `would skip` und, zusammen mit `--delete`, `would delete`.
@@ -121,16 +141,16 @@ Ein normaler Lauf lädt nur, was neu ist oder sich geändert hat (ETag und `If-M
 
 Zwei Läufe gleichzeitig sind gesperrt. Der zweite endet mit Status 3.
 
-Exit-Status: `0` in Ordnung, `1` Fehler beim Sync, `2` Aufruf oder Konfiguration, `3` schon ein Lauf aktiv. Meldungen gehen nach stderr. Der API-Schlüssel wird in den Meldungen durch `***` ersetzt. Während einer Übertragung steht er trotzdem in der URL und kann kurz in der Prozessliste sichtbar sein.
+Exit-Status: `0` in Ordnung, `1` Fehler beim Sync, `2` Aufruf oder Konfiguration, `3` schon ein Lauf aktiv. Meldungen gehen nach stderr. Das Passwort wird in den Meldungen durch `***` ersetzt.
 
-Welche Bibliotheken ankommen: alle Bibliotheken, darin alle Serien (Seite für Seite, 20 Einträge), darin jedes Kapitel. Kavita hängt die Download-Links direkt an die Serie. Ältere Server, die noch Band und Kapitel als Unterkataloge liefern, werden ebenfalls verfolgt. Sammlungen, Leselisten und Smart Filter werden nicht gespiegelt.
+Was ankommt: alle Navigations-Abschnitte des Katalogs (Bücher, Neu, Autoren, Serien, Tags, Verlage, Sprachen, Formate — seitenweise über `?offset=`), darin jeder Bucheintrag mit jedem seiner Formate. calibre-web hängt die Download-Links (`/opds/download/<Buch-ID>/<Format>/`) direkt an den Bucheintrag; der Dateiname wird aus dem Buchtitel und dem MIME-Typ gebildet. Ein Buch mit mehreren Formaten landet mehrfach, etwa als `Titel.epub` und `Titel.pdf`. Duplikate über verschiedene Katalogabschnitte werden über den Download-Pfad erkannt und nur einmal geladen.
 
 ## Timer
 
 Optional, und nach einem Firmware-Update wieder einzurichten, weil die Units unter `/etc` liegen:
 
 ```sh
-sh /home/root/kavita-sync/install.sh --timer
+sh /home/root/cwa-sync/install.sh --timer
 ```
 
 Der Timer startet drei Minuten nach dem Boot und einmal am Tag (`OnCalendar=daily`, `Persistent=true`). Im Suspend laufen auf dem reMarkable keine Timer. Wer das Gerät meist schlafen lässt, startet den Sync von Hand, solange es wach ist.
@@ -138,13 +158,13 @@ Der Timer startet drei Minuten nach dem Boot und einmal am Tag (`OnCalendar=dail
 ## Deinstallation
 
 ```sh
-sh /home/root/kavita-sync/uninstall.sh
+sh /home/root/cwa-sync/uninstall.sh
 ```
 
 Das entfernt Skript, Symlink, PATH-Block und die systemd-Units. Bücher, Konfiguration und Manifest bleiben.
 
 ```sh
-sh /home/root/kavita-sync/uninstall.sh --purge-config --purge-state --remove-wget
+sh /home/root/cwa-sync/uninstall.sh --purge-config --purge-state --remove-wget
 ```
 
 `--purge-config` löscht die Konfiguration, `--purge-state` Manifest und Sperre, `--remove-wget` das statische wget. Die Bücher in `DEST` bleiben in jedem Fall.
@@ -157,4 +177,4 @@ Auf einem Rechner mit `shellcheck`, `dash` oder `/bin/sh`, `python3`, `curl` und
 sh tests/run.sh
 ```
 
-Das prüft die Skripte mit `shellcheck -s sh`, füttert einen lokalen OPDS-Server und wiederholt den Lauf unter BusyBox-`sh` mit BusyBox-`awk`. Abgedeckt sind unter anderem Dry-Run, inkrementeller Lauf, 304, `--force`, `--delete`, ein abgebrochener Katalog (dann wird nichts gelöscht), ein einzelner fehlgeschlagener Download, eine Weiterleitung auf einen anderen Host, die Sperre, Installation und Prüfsumme. HTTP wird mit curl, GNU wget und BusyBox-wget geprüft. Python läuft nur in diesem Test, nicht auf dem Tablet.
+Das prüft die Skripte mit `shellcheck -s sh`, füttert einen lokalen calibre-web-artigen OPDS-Server (Basic-Auth, `/opds`, Download-Links, `?offset=`-Pagination) und wiederholt den Lauf unter BusyBox-`sh` mit BusyBox-`awk`. Abgedeckt sind unter anderem Dry-Run, inkrementeller Lauf, 304, `--force`, `--delete`, ein abgebrochener Katalog (dann wird nichts gelöscht), ein einzelner fehlgeschlagener Download, eine Weiterleitung auf einen anderen Host, falsche Zugangsdaten, die Sperre, Installation und Prüfsumme. HTTP wird mit curl, GNU wget und BusyBox-wget geprüft. Python läuft nur in diesem Test, nicht auf dem Tablet.

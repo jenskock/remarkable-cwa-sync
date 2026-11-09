@@ -1,4 +1,4 @@
-# Parse a Kavita OPDS 1.2 Atom feed into records separated by ASCII 0x1F.
+# Parse a calibre-web OPDS 1.2 Atom feed into records separated by ASCII 0x1F.
 # Works with BusyBox awk and mawk. Feed bytes are treated as opaque (LC_ALL=C).
 #
 # Output lines:
@@ -7,9 +7,10 @@
 #   BOOK <US> id <US> title <US> author <US> href <US> type <US> link-title
 #
 # Acquisition is any rel under http://opds-spec.org/acquisition except
-# sample/preview/borrow/buy/subscribe. Kavita uses
-# http://opds-spec.org/acquisition/open-access. Subsection rels are navigation.
-# Pagination is the feed-level rel="next" link (pageNumber=N).
+# sample/preview/borrow/buy/subscribe. calibre-web uses
+# http://opds-spec.org/acquisition and emits one link per book format.
+# Subsection rels are navigation.
+# Pagination is the feed-level rel="next" link (?offset=N).
 
 function utf8(cp) {
     if (cp < 32) {

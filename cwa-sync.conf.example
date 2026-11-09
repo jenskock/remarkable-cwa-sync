@@ -1,0 +1,48 @@
+# cwa-sync configuration.
+# Copy to /home/root/.config/cwa-sync.conf and edit.
+# Lines are KEY=VALUE. The file is not executed as a shell script.
+# Do not commit a copy that contains a real password.
+
+# Origin of the calibre-web(-automated) container, without a trailing slash.
+# crocodilestick/calibre-web-automated:latest listens on port 8083 by default
+# (change it in the container with CWA_PORT_OVERRIDE). A subpath is allowed
+# if a reverse proxy serves calibre-web below the root
+# (https://example.com/books).
+SERVER_URL=http://192.168.1.10:8083
+
+# OPDS catalog path inside calibre-web.
+OPDS_PATH=/opds
+
+# calibre-web account used for the OPDS catalog. calibre-web speaks HTTP
+# basic auth over OPDS, not an API key in the URL.
+# In calibre-web: edit the user and allow OPDS + download, or enable
+# "Require authentication for OPDS" in the admin server settings.
+# The container image crocodilestick/calibre-web-automated:latest disables
+# anonymous access, so these credentials are always needed there.
+USERNAME=
+PASSWORD=
+
+# Directory Plato reads. Kept under /home so a firmware update does not wipe it.
+DEST=/home/root/plato-media
+
+# Folder layout. One of:
+#   flat | series | author | author-series | library | library-series | library-author-series
+# calibre-web puts the author on every book entry; series and tag come from
+# the section the book was found in. Empty levels are left out.
+LAYOUT=author
+
+# ETag manifest and lock. Also under /home.
+STATE_DIR=/home/root/.local/share/cwa-sync
+
+# Delete tracked local files that disappeared from the server. Off by default.
+# --delete on the command line does the same for a single run.
+DELETE_MISSING=0
+
+# A bare wget user agent is sometimes blocked by reverse proxies.
+USER_AGENT=Mozilla/5.0 (compatible; cwa-sync/1.0; reMarkable)
+
+# Optional CA bundle if certificate verification fails on the tablet.
+# CA_CERT=/etc/ssl/certs/ca-certificates.crt
+
+# Set to 1 only while debugging a certificate problem.
+INSECURE=0

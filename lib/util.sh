@@ -1,4 +1,4 @@
-# Shared helpers for kavita-sync. Sourced, not executed.
+# Shared helpers for cwa-sync. Sourced, not executed.
 # shellcheck shell=sh
 
 # Used by the other sourced scripts.
@@ -23,22 +23,73 @@ log() {
 }
 
 redact() {
-    if [ -z "${API_KEY:-}" ]; then
+    if [ -z "${PASSWORD:-}" ]; then
         printf '%s' "$1"
         return 0
     fi
-    printf '%s' "$1" | REDACT_KEY="$API_KEY" awk '
-        function scrub(s,    k, out, i) {
-            k = ENVIRON["REDACT_KEY"]
-            out = ""
-            while ((i = index(s, k)) > 0) {
-                out = out substr(s, 1, i - 1) "***"
-                s = substr(s, i + length(k))
+    printf '%s' "$1" | REDACT_PASS="$PASSWORD" REDACT_B64="${CRED_B64:-}" awk '
+        function scrub(s,    k, key, out, i) {
+            for (k in keys) {
+                key = keys[k]
+                if (key == "") continue
+                out = ""
+                while ((i = index(s, key)) > 0) {
+                    out = out substr(s, 1, i - 1) "***"
+                    s = substr(s, i + length(key))
+                }
+                s = out s
             }
-            return out s
+            return s
+        }
+        BEGIN {
+            keys[1] = ENVIRON["REDACT_PASS"]
+            keys[2] = ENVIRON["REDACT_B64"]
         }
         { print scrub($0) }
     '
+}
+
+# Base64 (RFC 4648) in pure awk so it works with BusyBox awk on the tablet.
+# Input is read as raw bytes (LC_ALL=C), no trailing newline is added.
+b64encode() {
+    LC_ALL=C awk '
+        function ord_init(    i) {
+            if (ord_done) return
+            ord_done = 1
+            for (i = 0; i < 256; i++) ordv[sprintf("%c", i)] = i
+        }
+        function enc(s,    tbl, out, n, i, c1, c2, c3, a, b, c, d) {
+            ord_init()
+            tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+            out = ""
+            n = length(s)
+            i = 1
+            while (i <= n) {
+                c1 = ordv[substr(s, i, 1)]; i++
+                if (i <= n) { c2 = ordv[substr(s, i, 1)]; i++ } else c2 = -1
+                if (i <= n) { c3 = ordv[substr(s, i, 1)]; i++ } else c3 = -1
+                a = int(c1 / 4)
+                b = (c1 % 4) * 16 + (c2 >= 0 ? int(c2 / 16) : 0)
+                c = c2 < 0 ? 64 : (c2 % 16) * 4 + (c3 >= 0 ? int(c3 / 64) : 0)
+                d = c3 < 0 ? 64 : c3 % 64
+                out = out substr(tbl, a + 1, 1) substr(tbl, b + 1, 1)
+                if (c2 < 0) out = out "="
+                else out = out substr(tbl, c + 1, 1)
+                if (c3 < 0) out = out "="
+                else out = out substr(tbl, d + 1, 1)
+            }
+            return out
+        }
+        { buf = buf $0 }
+        END { printf "%s", enc(buf) }
+    '
+}
+
+# calibre-web OPDS uses HTTP basic auth with the web login credentials.
+setup_auth() {
+    CRED_B64=$(printf '%s:%s' "$USERNAME" "$PASSWORD" | b64encode)
+    AUTH_HEADER="Basic $CRED_B64"
+    export CRED_B64 AUTH_HEADER
 }
 
 die() {
@@ -189,20 +240,40 @@ safe_filename() {
     fi
 }
 
+join_rel() {
+    # join_rel DIR FILE — DIR may be empty, then only FILE is printed.
+    if [ -n "$1" ]; then
+        printf '%s/%s' "$1" "$2"
+    else
+        printf '%s' "$2"
+    fi
+}
+
 build_rel() {
     local lib ser aut file rel
-    lib=$(sanitize_component "$1" "Library")
-    ser=$(sanitize_component "$2" "Series")
-    aut=$(sanitize_component "$3" "Unknown")
+    lib=$1
+    ser=$2
+    aut=$3
     file=$4
+    # Empty components (no library/series/author context) are left out
+    # instead of becoming placeholder directories.
+    if [ -n "$lib" ]; then
+        lib=$(sanitize_component "$lib" "Library")
+    fi
+    if [ -n "$ser" ]; then
+        ser=$(sanitize_component "$ser" "Series")
+    fi
+    if [ -n "$aut" ]; then
+        aut=$(sanitize_component "$aut" "Unknown")
+    fi
     case $LAYOUT in
         flat) rel=$file ;;
-        series) rel=$ser/$file ;;
-        author) rel=$aut/$file ;;
-        author-series) rel=$aut/$ser/$file ;;
-        library) rel=$lib/$file ;;
-        library-series) rel=$lib/$ser/$file ;;
-        library-author-series) rel=$lib/$aut/$ser/$file ;;
+        series) rel=$(join_rel "$ser" "$file") ;;
+        author) rel=$(join_rel "$aut" "$file") ;;
+        author-series) rel=$(join_rel "$aut" "$(join_rel "$ser" "$file")") ;;
+        library) rel=$(join_rel "$lib" "$file") ;;
+        library-series) rel=$(join_rel "$lib" "$(join_rel "$ser" "$file")") ;;
+        library-author-series) rel=$(join_rel "$lib" "$(join_rel "$aut" "$(join_rel "$ser" "$file")")") ;;
         *)
             die "unknown LAYOUT '$LAYOUT'"
             ;;
@@ -373,7 +444,8 @@ allows_redirect() {
 }
 
 opds_tail() {
-    local p
+    # Path below OPDS_PATH, "" for the catalog root, "external" off the catalog.
+    local p prefix
     p=$(url_path "$1")
     while :; do
         case $p in
@@ -381,12 +453,13 @@ opds_tail() {
             *) break ;;
         esac
     done
+    prefix=${OPDS_PATH:-/opds}
     case $p in
-        */api/opds/"$API_KEY")
+        "$prefix")
             printf ''
             ;;
-        */api/opds/"$API_KEY"/*)
-            printf '%s' "${p#*/api/opds/"$API_KEY"/}"
+        "$prefix"/*)
+            printf '%s' "${p#"$prefix"/}"
             ;;
         *)
             printf 'external'
@@ -395,100 +468,39 @@ opds_tail() {
 }
 
 classify_url() {
-    local tail id rest sid after vrem vid crem cid
+    # root: the OPDS catalog root. nav: a navigation feed to crawl.
+    # download: a file link, never crawled. skip: outside the catalog.
+    local tail
     tail=$(opds_tail "$1")
     case $tail in
-        ""|external) printf 'skip'; return ;;
-    esac
-    case $tail in
-        libraries/*)
-            id=${tail#libraries/}
-            case $id in
-                */*) printf 'skip'; return ;;
-            esac
-            if is_digits "$id"; then
-                printf 'library'
-            else
-                printf 'skip'
-            fi
-            return
-            ;;
-        series/*)
-            rest=${tail#series/}
-            sid=${rest%%/*}
-            if ! is_digits "$sid"; then
-                printf 'skip'
-                return
-            fi
-            if [ "$rest" = "$sid" ]; then
-                printf 'series'
-                return
-            fi
-            after=${rest#*/}
-            case $after in
-                volume/*) ;;
-                *) printf 'skip'; return ;;
-            esac
-            vrem=${after#volume/}
-            vid=${vrem%%/*}
-            if ! is_digits "$vid"; then
-                printf 'skip'
-                return
-            fi
-            if [ "$vrem" = "$vid" ]; then
-                printf 'nested'
-                return
-            fi
-            after=${vrem#*/}
-            case $after in
-                chapter/*) ;;
-                *) printf 'skip'; return ;;
-            esac
-            crem=${after#chapter/}
-            cid=${crem%%/*}
-            if ! is_digits "$cid"; then
-                printf 'skip'
-                return
-            fi
-            if [ "$crem" = "$cid" ]; then
-                printf 'nested'
-                return
-            fi
-            after=${crem#*/}
-            case $after in
-                download|download/*) printf 'download' ;;
-                *) printf 'skip' ;;
-            esac
-            return
-            ;;
-        *)
-            printf 'skip'
-            ;;
+        "") printf 'root' ;;
+        external) printf 'skip' ;;
+        download|download/*) printf 'download' ;;
+        *) printf 'nav' ;;
     esac
 }
 
 book_key() {
-    local href id path rest sid tmp vid cid tail
+    local href id path rest bid fmt tail
     href=$1
     id=$2
     path=${href%%\?*}
     case $path in
-        *"/series/"*)
-            rest=${path#*"/series/"}
-            sid=${rest%%/*}
-            rest=${rest#*/}
-            case $rest in
-                volume/*/chapter/*/download|volume/*/chapter/*/download/*)
-                    tmp=${rest#volume/}
-                    vid=${tmp%%/*}
-                    tmp=${tmp#*/chapter/}
-                    cid=${tmp%%/*}
-                    if is_digits "$sid" && is_digits "$vid" && is_digits "$cid"; then
-                        printf 's%s/v%s/c%s' "$sid" "$vid" "$cid"
-                        return
-                    fi
-                    ;;
-            esac
+        */download/*)
+            # calibre-web: /opds/download/<book_id>/<format>/
+            rest=${path#*/download/}
+            bid=${rest%%/*}
+            fmt=${rest#*/}
+            while :; do
+                case $fmt in
+                    */) fmt=${fmt%/} ;;
+                    *) break ;;
+                esac
+            done
+            if [ -n "$bid" ] && [ -n "$fmt" ]; then
+                printf 'dl-%s-%s' "$(sanitize_component "$bid" "x")" "$(sanitize_component "$fmt" "x")"
+                return
+            fi
             ;;
     esac
     tail=$(sanitize_component "$(urldecode "${path##*/}")" "file")
@@ -497,7 +509,7 @@ book_key() {
 
 load_config() {
     if [ ! -f "$CONFIG" ]; then
-        usage_die "config not found: $CONFIG (copy kavita-sync.conf.example)"
+        usage_die "config not found: $CONFIG (copy cwa-sync.conf.example)"
     fi
     local line key val
     while IFS= read -r line || [ -n "$line" ]; do
@@ -521,7 +533,9 @@ load_config() {
         esac
         case $key in
             SERVER_URL) SERVER_URL=$val ;;
-            API_KEY) API_KEY=$val ;;
+            OPDS_PATH) OPDS_PATH=$val ;;
+            USERNAME) USERNAME=$val ;;
+            PASSWORD) PASSWORD=$val ;;
             DEST) DEST=$val ;;
             LAYOUT) LAYOUT=$val ;;
             STATE_DIR) STATE_DIR=$val ;;
@@ -555,14 +569,28 @@ validate_config() {
             *) break ;;
         esac
     done
-    if [ -z "${API_KEY:-}" ]; then
-        usage_die "API_KEY is empty. In Kavita: user settings, 3rd party clients / OPDS."
+    if [ -z "${OPDS_PATH:-}" ]; then
+        OPDS_PATH=/opds
     fi
-    case $API_KEY in
-        *[!A-Za-z0-9._-]*)
-            usage_die "API_KEY contains characters this client will not put in a URL"
-            ;;
+    case $OPDS_PATH in
+        /*) ;;
+        *) OPDS_PATH=/$OPDS_PATH ;;
     esac
+    while :; do
+        case $OPDS_PATH in
+            */) OPDS_PATH=${OPDS_PATH%/} ;;
+            *) break ;;
+        esac
+    done
+    if [ "$OPDS_PATH" = "" ] || [ "$OPDS_PATH" = "/" ]; then
+        usage_die "OPDS_PATH must be a path like /opds, not /"
+    fi
+    if [ -z "${USERNAME:-}" ]; then
+        usage_die "USERNAME is empty. Use a calibre-web account that may use OPDS and download."
+    fi
+    if [ -z "${PASSWORD:-}" ]; then
+        usage_die "PASSWORD is empty. The calibre-web password of USERNAME (HTTP basic auth for OPDS)."
+    fi
     if [ -z "${DEST:-}" ]; then
         usage_die "DEST is empty"
     fi
@@ -576,14 +604,14 @@ validate_config() {
             ;;
     esac
     if [ -z "${LAYOUT:-}" ]; then
-        LAYOUT=library-series
+        LAYOUT=author
     fi
     case $LAYOUT in
         flat|series|author|author-series|library|library-series|library-author-series) ;;
         *) usage_die "unknown LAYOUT '$LAYOUT'" ;;
     esac
     if [ -z "${STATE_DIR:-}" ]; then
-        STATE_DIR=/home/root/.local/share/kavita-sync
+        STATE_DIR=/home/root/.local/share/cwa-sync
     fi
     case $STATE_DIR in
         /*) ;;
@@ -593,7 +621,7 @@ validate_config() {
         DELETE_MISSING=0
     fi
     if [ -z "${USER_AGENT:-}" ]; then
-        USER_AGENT="Mozilla/5.0 (compatible; kavita-sync/1.0; reMarkable)"
+        USER_AGENT="Mozilla/5.0 (compatible; cwa-sync/1.0; reMarkable)"
     fi
     if [ -z "${INSECURE:-}" ]; then
         INSECURE=0
@@ -610,27 +638,27 @@ acquire_lock() {
     local oldpid
     mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR"
     chmod 700 "$STATE_DIR" || true
-    LOCK_FILE=$STATE_DIR/kavita-sync.lock
+    LOCK_FILE=$STATE_DIR/cwa-sync.lock
     if command -v flock >/dev/null 2>&1; then
         # Hold fd 9 for the life of the process. Do not remove the lock file.
         exec 9>"$LOCK_FILE" || die "cannot open lock"
         if ! flock -n 9; then
-            log error "another kavita-sync is already running"
+            log error "another cwa-sync is already running"
             exit 3
         fi
         LOCK_MODE="flock"
         return 0
     fi
-    LOCK_DIR=$STATE_DIR/kavita-sync.lockdir
+    LOCK_DIR=$STATE_DIR/cwa-sync.lockdir
     if ! mkdir "$LOCK_DIR" 2>/dev/null; then
         oldpid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
         if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
-            log error "another kavita-sync is already running (pid $oldpid)"
+            log error "another cwa-sync is already running (pid $oldpid)"
             exit 3
         fi
         rm -rf "$LOCK_DIR"
         mkdir "$LOCK_DIR" || {
-            log error "another kavita-sync is already running"
+            log error "another cwa-sync is already running"
             exit 3
         }
     fi

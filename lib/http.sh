@@ -1,4 +1,4 @@
-# HTTP client for kavita-sync. Sourced, not executed.
+# HTTP client for cwa-sync. Sourced, not executed.
 # Prefers curl, then a TLS-capable wget. BusyBox wget on stock reMarkable
 # firmware does not speak HTTPS; install.sh can drop a static wget in
 # /home/root/.local/bin, which is checked before PATH.
@@ -66,18 +66,18 @@ wget_detect_features() {
 
 pick_client() {
     local forced want_tls curl_bin wget_bin home_wget
-    forced=${KAVITA_HTTP_CLIENT:-}
+    forced=${CWA_HTTP_CLIENT:-}
     if need_tls; then
         want_tls=1
     else
         want_tls=0
     fi
-    curl_bin=${KAVITA_CURL:-}
+    curl_bin=${CWA_CURL:-}
     if [ -z "$curl_bin" ]; then
         curl_bin=$(command -v curl 2>/dev/null || true)
     fi
     home_wget=/home/root/.local/bin/wget
-    wget_bin=${KAVITA_WGET:-}
+    wget_bin=${CWA_WGET:-}
     if [ -z "$wget_bin" ]; then
         if [ -x "$home_wget" ]; then
             wget_bin=$home_wget
@@ -112,7 +112,7 @@ pick_client() {
         return 0
     fi
     if [ -n "$forced" ]; then
-        usage_die "KAVITA_HTTP_CLIENT must be curl or wget"
+        usage_die "CWA_HTTP_CLIENT must be curl or wget"
     fi
 
     if [ -n "$curl_bin" ] && [ -x "$curl_bin" ]; then
@@ -149,7 +149,7 @@ header_value() {
     name=$1
     file=$2
     [ -f "$file" ] || return 0
-    awk -v name="$name" '
+    LC_ALL=C awk -v name="$name" '
         BEGIN { want = tolower(name); val = "" }
         {
             line = $0
@@ -174,7 +174,7 @@ http_code_from_file() {
     local file
     file=$1
     [ -f "$file" ] || return 0
-    awk '
+    LC_ALL=C awk '
         BEGIN { code = "" }
         {
             line = $0
@@ -202,7 +202,7 @@ audit_locations() {
     local file locf loc
     file=$1
     locf=$WORK/locations
-    awk '
+    LC_ALL=C awk '
         {
             line = $0
             sub(/\r$/, "", line)
@@ -244,6 +244,9 @@ curl_request() {
     : > "$errf"
     set -- -sS --connect-timeout 20 --max-time "$max_time" \
         -A "$USER_AGENT" -D "$hdr" -o "$dest" -w '%{http_code}'
+    if [ -n "${AUTH_HEADER:-}" ]; then
+        set -- "$@" -H "Authorization: $AUTH_HEADER"
+    fi
     if [ -n "${CA_CERT:-}" ]; then
         set -- "$@" --cacert "$CA_CERT"
     fi
@@ -297,12 +300,17 @@ wget_request() {
         set -- "$@" --no-check-certificate
     fi
     if [ "${WGET_HEADER:-0}" = 1 ]; then
+        if [ -n "${AUTH_HEADER:-}" ]; then
+            set -- "$@" --header="Authorization: $AUTH_HEADER"
+        fi
         if [ -n "$etag" ]; then
             set -- "$@" --header="If-None-Match: $etag"
         fi
         if [ -n "$lm" ]; then
             set -- "$@" --header="If-Modified-Since: $lm"
         fi
+    elif [ -n "${AUTH_HEADER:-}" ]; then
+        log warn "this wget cannot send the Authorization header; the server will likely answer 401"
     fi
     set -- "$@" "$url"
     "$WGET_BIN" "$@" || true
@@ -353,8 +361,8 @@ http_request() {
 retry_sleep() {
     local n
     n=$1
-    if [ -n "${KAVITA_RETRY_SLEEP:-}" ]; then
-        sleep "$KAVITA_RETRY_SLEEP"
+    if [ -n "${CWA_RETRY_SLEEP:-}" ]; then
+        sleep "$CWA_RETRY_SLEEP"
     else
         sleep "$n"
     fi
